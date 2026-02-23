@@ -1,5 +1,5 @@
 // LLM provider configuration
-export type LLMProvider = "openai" | "deepseek" | "kimi" | "claude";
+export type LLMProvider = "openai" | "deepseek" | "kimi" | "claude" | "gemini" | "qwen" | "grok" | "ollama";
 
 export interface LLMConfig {
   provider: LLMProvider;

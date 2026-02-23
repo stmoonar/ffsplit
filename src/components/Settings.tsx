@@ -1,12 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { LLMConfig, LLMProvider } from "@/lib/types";
 import {
   PROVIDER_LABELS,
+  FALLBACK_MODELS,
   getDefaultModel,
   getDefaultBaseUrl,
 } from "@/lib/llm";
+import { ProviderIcon } from "./ProviderIcons";
 
 interface SettingsProps {
   isOpen: boolean;
@@ -15,14 +17,37 @@ interface SettingsProps {
   onSave: (config: LLMConfig | null) => void;
 }
 
-const PROVIDERS: LLMProvider[] = ["openai", "claude", "deepseek", "kimi"];
+const PROVIDERS: LLMProvider[] = [
+  "openai",
+  "claude",
+  "gemini",
+  "deepseek",
+  "kimi",
+  "qwen",
+  "grok",
+  "ollama"
+];
 
-const PROVIDER_ICONS: Record<LLMProvider, string> = {
-  openai: "◈",
-  claude: "◉",
-  deepseek: "◆",
-  kimi: "◇",
-};
+// ---------- Dynamic model fetching ----------
+
+type ModelListState = "idle" | "loading" | "done" | "error";
+
+async function fetchModelsFromProvider(
+  provider: LLMProvider,
+  apiKey: string,
+  baseUrl?: string
+): Promise<string[]> {
+  const params = new URLSearchParams({ provider, apiKey });
+  if (baseUrl) params.set("baseUrl", baseUrl);
+
+  const res = await fetch(`/api/models?${params.toString()}`);
+  if (!res.ok) return [];
+
+  const json = await res.json();
+  return json.models ?? [];
+}
+
+// ------------------------------------------------
 
 export default function Settings({
   isOpen,
@@ -44,6 +69,11 @@ export default function Settings({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [closing, setClosing] = useState(false);
 
+  // Dynamic model list state
+  const [modelList, setModelList] = useState<string[]>([]);
+  const [modelListState, setModelListState] = useState<ModelListState>("idle");
+  const fetchIdRef = useRef(0); // prevent stale fetches
+
   // Sync form when llmConfig prop changes
   useEffect(() => {
     if (isOpen) {
@@ -55,6 +85,48 @@ export default function Settings({
       setClosing(false);
     }
   }, [isOpen, llmConfig]);
+
+  // Fetch models when provider/apiKey/baseUrl changes (with debounce on apiKey)
+  useEffect(() => {
+    // Need an API key for most providers (except ollama)
+    const needsKey = provider !== "ollama";
+    if (needsKey && !apiKey.trim()) {
+      setModelList([]);
+      setModelListState("idle");
+      return;
+    }
+
+    const id = ++fetchIdRef.current;
+
+    // Small delay so we don't fire on every keystroke while typing the key
+    const timer = setTimeout(async () => {
+      setModelListState("loading");
+      try {
+        const models = await fetchModelsFromProvider(provider, apiKey.trim(), baseUrl.trim() || undefined);
+        // Only update if this is still the latest request
+        if (fetchIdRef.current !== id) return;
+        if (models.length > 0) {
+          setModelList(models);
+          setModelListState("done");
+        } else {
+          setModelList([]);
+          setModelListState("error");
+        }
+      } catch {
+        if (fetchIdRef.current !== id) return;
+        setModelList([]);
+        setModelListState("error");
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [provider, apiKey, baseUrl]);
+
+  // The list we actually display: dynamic if available, fallback otherwise
+  const displayModels =
+    modelListState === "done" && modelList.length > 0
+      ? modelList
+      : FALLBACK_MODELS[provider] ?? [];
 
   // Update model default when provider changes
   const handleProviderChange = useCallback((p: LLMProvider) => {
@@ -69,12 +141,12 @@ export default function Settings({
   }, [onClose]);
 
   const handleSave = useCallback(() => {
-    if (!apiKey.trim()) {
+    if (!apiKey.trim() && provider !== "ollama") {
       onSave(null);
     } else {
       onSave({
         provider,
-        apiKey: apiKey.trim(),
+        apiKey: apiKey.trim() || 'ollama',
         model: model.trim() || undefined,
         baseUrl: baseUrl.trim() || undefined,
       });
@@ -127,7 +199,7 @@ export default function Settings({
           </div>
 
           {/* Body */}
-          <div className="px-6 py-5 space-y-6">
+          <div className="px-6 py-5 space-y-6 max-h-[70vh] overflow-y-auto">
             {/* Provider Selection */}
             <div>
               <label className="small-caps mb-3 block text-muted-foreground">
@@ -139,27 +211,24 @@ export default function Settings({
                     key={p}
                     type="button"
                     onClick={() => handleProviderChange(p)}
-                    className={`group relative rounded-lg border px-3 py-3 text-center transition-all duration-200 ${
-                      provider === p
-                        ? "border-accent bg-accent/5 shadow-sm"
-                        : "border-border hover:border-border-hover"
-                    }`}
+                    className={`group relative rounded-lg border px-3 py-3 text-center transition-all duration-200 ${provider === p
+                      ? "border-accent bg-accent/5 shadow-sm"
+                      : "border-border hover:border-border-hover"
+                      }`}
                   >
                     <span
-                      className={`block text-lg leading-none ${
-                        provider === p
-                          ? "text-accent"
-                          : "text-muted-foreground/50 group-hover:text-muted-foreground"
-                      }`}
+                      className={`mx-auto flex h-6 w-6 items-center justify-center transition-colors ${provider === p
+                        ? "text-accent"
+                        : "text-muted-foreground/60 group-hover:text-muted-foreground"
+                        }`}
                     >
-                      {PROVIDER_ICONS[p]}
+                      <ProviderIcon provider={p} size={20} />
                     </span>
                     <span
-                      className={`mt-1.5 block text-[11px] font-semibold tracking-wide ${
-                        provider === p
-                          ? "text-accent"
-                          : "text-muted-foreground"
-                      }`}
+                      className={`mt-1.5 block text-[11px] font-semibold tracking-wide ${provider === p
+                        ? "text-accent"
+                        : "text-muted-foreground"
+                        }`}
                     >
                       {PROVIDER_LABELS[p].split(" ")[0]}
                     </span>
@@ -178,7 +247,11 @@ export default function Settings({
                   type={showKey ? "text" : "password"}
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={`Enter your ${PROVIDER_LABELS[provider]} API key...`}
+                  placeholder={
+                    provider === "ollama"
+                      ? "Not needed for local Ollama..."
+                      : `Enter your ${PROVIDER_LABELS[provider]} API key...`
+                  }
                   className="h-11 w-full rounded-lg border border-border bg-transparent px-4 pr-16 font-mono text-sm text-foreground transition-colors duration-200 placeholder:text-muted-foreground/40 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
                 />
                 <button
@@ -197,16 +270,58 @@ export default function Settings({
 
             {/* Model */}
             <div>
-              <label className="small-caps mb-2 block text-muted-foreground">
-                Model
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="small-caps text-muted-foreground">
+                  Model
+                </label>
+                {/* Status indicator */}
+                {modelListState === "loading" && (
+                  <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
+                    <span className="inline-block h-2 w-2 animate-spin rounded-full border border-accent border-t-transparent" />
+                    Fetching models…
+                  </span>
+                )}
+                {modelListState === "done" && modelList.length > 0 && (
+                  <span className="flex items-center gap-1.5 text-[10px] text-green-600">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-green-500" />
+                    {modelList.length} models from API
+                  </span>
+                )}
+                {modelListState === "error" && (
+                  <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground/50">
+                    <span className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
+                    Using preset list
+                  </span>
+                )}
+              </div>
               <input
                 type="text"
+                list={`${provider}-models`}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 placeholder={getDefaultModel(provider)}
                 className="h-11 w-full rounded-lg border border-border bg-transparent px-4 font-mono text-sm text-foreground transition-colors duration-200 placeholder:text-muted-foreground/40 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
               />
+              <datalist id={`${provider}-models`}>
+                {displayModels.map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {displayModels.map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setModel(m)}
+                    className={`rounded-md border px-2 py-1 text-[11px] font-mono transition-colors ${model === m
+                      ? "border-accent bg-accent/10 text-accent"
+                      : "border-border text-muted-foreground hover:border-border-hover hover:text-foreground"
+                      }`}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
             </div>
 
             {/* Advanced: Base URL */}

@@ -13,6 +13,7 @@ import TaskInput from "@/components/TaskInput";
 import AgentFlow from "@/components/AgentFlow";
 import SplitResult from "@/components/SplitResult";
 import Settings from "@/components/Settings";
+import { RiSettings3Line } from "@remixicon/react";
 
 const LLM_STORAGE_KEY = "fairsplit_llm_config";
 
@@ -178,10 +179,7 @@ export default function Home() {
               className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors duration-200 hover:border-accent hover:text-accent"
               title="LLM Settings"
             >
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M6.86 1.45a1.2 1.2 0 0 1 2.28 0l.27.83a1.2 1.2 0 0 0 1.52.72l.82-.3a1.2 1.2 0 0 1 1.61 1.14l-.04.87a1.2 1.2 0 0 0 1.01 1.24l.86.13a1.2 1.2 0 0 1 .57 2.17l-.7.52a1.2 1.2 0 0 0-.33 1.55l.44.76a1.2 1.2 0 0 1-.88 1.8l-.86.07a1.2 1.2 0 0 0-1.1 1.1l-.07.86a1.2 1.2 0 0 1-1.8.88l-.76-.44a1.2 1.2 0 0 0-1.55.33l-.52.7a1.2 1.2 0 0 1-2.17-.57l-.13-.86a1.2 1.2 0 0 0-1.24-1.01l-.87.04A1.2 1.2 0 0 1 1.47 12l.3-.82a1.2 1.2 0 0 0-.72-1.52l-.83-.27a1.2 1.2 0 0 1 0-2.28l.83-.27a1.2 1.2 0 0 0 .72-1.52l-.3-.82a1.2 1.2 0 0 1 1.14-1.61l.87.04a1.2 1.2 0 0 0 1.24-1.01l.13-.86z" />
-                <circle cx="8" cy="8" r="2.5" />
-              </svg>
+              <RiSettings3Line size={18} />
             </button>
           </div>
         </div>

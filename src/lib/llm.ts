@@ -20,15 +20,36 @@ const PROVIDER_DEFAULTS: Record<
   kimi: { baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
   claude: {
     baseUrl: "https://api.anthropic.com/v1",
-    model: "claude-sonnet-4-20250514",
+    model: "claude-3-5-sonnet-20241022",
   },
+  gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-flash" },
+  qwen: { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-max" },
+  grok: { baseUrl: "https://api.x.ai/v1", model: "grok-2-latest" },
+  ollama: { baseUrl: "http://localhost:11434/v1", model: "llama3.2" },
 };
 
 export const PROVIDER_LABELS: Record<LLMProvider, string> = {
   openai: "OpenAI",
-  deepseek: "Deepseek",
-  kimi: "Kimi (Moonshot)",
-  claude: "Claude (Anthropic)",
+  deepseek: "DeepSeek",
+  kimi: "Kimi",
+  claude: "Anthropic",
+  gemini: "Google",
+  qwen: "Alibaba",
+  grok: "xAI",
+  ollama: "Ollama",
+};
+
+/** Fallback model lists — used when the provider's /models API is unavailable
+ *  (e.g. Anthropic has no such endpoint) or when no API key is configured yet. */
+export const FALLBACK_MODELS: Record<LLMProvider, string[]> = {
+  openai: ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
+  deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  kimi: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+  claude: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
+  gemini: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-pro-exp"],
+  qwen: ["qwen-plus", "qwen-max", "qwen-long", "qwen-turbo", "qwen2.5-coder-32b-instruct"],
+  grok: ["grok-2-latest", "grok-2-vision-latest"],
+  ollama: ["llama3.2", "qwen2.5", "deepseek-r1"],
 };
 
 function getBaseUrl(config: LLMConfig): string {
