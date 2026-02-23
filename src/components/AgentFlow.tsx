@@ -1,22 +1,23 @@
 "use client";
 
 import { useRef, useEffect } from "react";
-import { AgentId, ContributionTrace } from "@/lib/types";
+import { AgentId, ContributionTrace, TaskDecomposition } from "@/lib/types";
 
 interface AgentFlowProps {
   agentOutputs: Record<AgentId, string>;
   activeAgents: Set<AgentId>;
   completedAgents: Set<AgentId>;
   traces: ContributionTrace[];
+  decomposition: TaskDecomposition | null;
 }
 
 const AGENT_META: Record<
   AgentId,
   { label: string; role: string; icon: string }
 > = {
-  planner: { label: "Planner Agent", role: "Coordinator", icon: "P" },
-  flight: { label: "Flight Agent", role: "Data Provider", icon: "F" },
-  hotel: { label: "Hotel Agent", role: "Data Provider", icon: "H" },
+  researcher_a: { label: "Researcher A", role: "Data Collector", icon: "A" },
+  researcher_b: { label: "Researcher B", role: "Data Collector", icon: "B" },
+  synthesizer: { label: "Synthesizer", role: "Coordinator", icon: "S" },
 };
 
 
@@ -56,12 +57,14 @@ function AgentPanel({
   active,
   completed,
   trace,
+  subtask,
 }: {
   agent: AgentId;
   output: string;
   active: boolean;
   completed: boolean;
   trace?: ContributionTrace;
+  subtask?: string;
 }) {
   const meta = AGENT_META[agent];
   const outputRef = useRef<HTMLPreElement>(null);
@@ -104,10 +107,19 @@ function AgentPanel({
         <StatusBadge active={active} completed={completed} />
       </div>
 
+      {/* Subtask description */}
+      {subtask && (
+        <div className="border-b border-border/50 bg-muted/20 px-5 py-2">
+          <p className="text-xs text-muted-foreground">
+            <span className="text-accent">TASK</span> {subtask}
+          </p>
+        </div>
+      )}
+
       {/* Output area */}
       <pre
         ref={outputRef}
-        className={`max-h-48 min-h-[80px] overflow-y-auto px-5 py-3 font-mono text-xs leading-relaxed text-foreground/80 ${
+        className={`max-h-48 min-h-[80px] overflow-y-auto whitespace-pre-wrap px-5 py-3 font-mono text-xs leading-relaxed text-foreground/80 ${
           active ? "cursor-blink" : ""
         }`}
       >
@@ -156,6 +168,7 @@ export default function AgentFlow({
   activeAgents,
   completedAgents,
   traces,
+  decomposition,
 }: AgentFlowProps) {
   return (
     <div>
@@ -166,10 +179,27 @@ export default function AgentFlow({
         <span className="h-px flex-1 bg-border" />
       </div>
 
+      {/* Task decomposition display */}
+      {decomposition && (
+        <div className="mb-6 rounded-lg border border-accent/20 bg-card p-4">
+          <p className="small-caps mb-2 text-accent">Task Decomposition</p>
+          <div className="space-y-1 text-sm text-foreground/80">
+            <p>
+              <span className="font-semibold text-accent">A:</span>{" "}
+              {decomposition.subtask_a}
+            </p>
+            <p>
+              <span className="font-semibold text-accent">B:</span>{" "}
+              {decomposition.subtask_b}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Agent panels */}
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Data agents side by side */}
-        {(["flight", "hotel"] as AgentId[]).map((agent) => (
+        {/* Researcher agents side by side */}
+        {(["researcher_a", "researcher_b"] as AgentId[]).map((agent) => (
           <AgentPanel
             key={agent}
             agent={agent}
@@ -177,18 +207,26 @@ export default function AgentFlow({
             active={activeAgents.has(agent)}
             completed={completedAgents.has(agent)}
             trace={traces.find((t) => t.agent === agent)}
+            subtask={
+              decomposition
+                ? agent === "researcher_a"
+                  ? decomposition.subtask_a
+                  : decomposition.subtask_b
+                : undefined
+            }
           />
         ))}
       </div>
 
-      {/* Planner agent full width below */}
+      {/* Synthesizer full width below */}
       <div className="mt-6">
         <AgentPanel
-          agent="planner"
-          output={agentOutputs.planner}
-          active={activeAgents.has("planner")}
-          completed={completedAgents.has("planner")}
-          trace={traces.find((t) => t.agent === "planner")}
+          agent="synthesizer"
+          output={agentOutputs.synthesizer}
+          active={activeAgents.has("synthesizer")}
+          completed={completedAgents.has("synthesizer")}
+          trace={traces.find((t) => t.agent === "synthesizer")}
+          subtask={decomposition?.synthesis_prompt}
         />
       </div>
     </div>

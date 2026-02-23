@@ -1,18 +1,27 @@
 import { NextRequest } from "next/server";
-import { streamPlanner } from "@/lib/agents/planner";
-import { runFlightAgent } from "@/lib/agents/flight";
-import { runHotelAgent } from "@/lib/agents/hotel";
+import { decomposeTask } from "@/lib/agents/decompose";
+import { runWorkerAgent } from "@/lib/agents/worker";
+import { streamSynthesizer } from "@/lib/agents/synthesizer";
 import { calculateShapley } from "@/lib/shapley";
 import { verifyTrace } from "@/lib/trace";
-import { SSEEvent, ContributionTrace } from "@/lib/types";
+import { SSEEvent, ContributionTrace, LLMConfig } from "@/lib/types";
 
 function sseEncode(event: SSEEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
 export async function POST(request: NextRequest) {
-  const { query, payment_usdc } = await request.json();
+  const { query, payment_usdc, llm_config } = await request.json();
   const taskId = `task-${Date.now().toString(36)}`;
+
+  // Resolve LLM config: prefer user-provided, fallback to env var
+  let resolvedConfig: LLMConfig | undefined = llm_config;
+  if (!resolvedConfig?.apiKey && process.env.KIMI_API_KEY) {
+    resolvedConfig = {
+      provider: "kimi",
+      apiKey: process.env.KIMI_API_KEY,
+    };
+  }
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -24,80 +33,113 @@ export async function POST(request: NextRequest) {
       try {
         const traces: ContributionTrace[] = [];
 
-        // --- Phase 1: Run Flight and Hotel agents in parallel ---
-        send({ type: "agent_start", agent: "flight", action: "search_flights" });
-        send({ type: "agent_start", agent: "hotel", action: "search_hotels" });
+        // --- Phase 0: Decompose task ---
+        const decomposition = await decomposeTask(query, resolvedConfig);
+        send({ type: "task_decomposed", decomposition });
 
-        const [flightResult, hotelResult] = await Promise.all([
-          runFlightAgent(taskId),
-          runHotelAgent(taskId),
-        ]);
-
-        // Send flight results as chunks
-        const adoptedFlights = flightResult.flights.filter((f) => f.adopted);
-        for (const flight of flightResult.flights) {
-          const marker = flight.adopted ? " [ADOPTED]" : "";
-          send({
-            type: "agent_chunk",
-            agent: "flight",
-            content: `${flight.airline} | ${flight.departure} → ${flight.arrival} | ${flight.departure_time}-${flight.arrival_time} | ¥${flight.price_cny} | ${flight.duration}${marker}\n`,
-          });
-          await new Promise((r) => setTimeout(r, 200));
-        }
-        send({
-          type: "agent_done",
-          agent: "flight",
-          trace: flightResult.trace,
-        });
-        traces.push(flightResult.trace);
-
-        // Send hotel results
-        for (const hotel of hotelResult.hotels) {
-          const marker = hotel.adopted ? " [ADOPTED]" : "";
-          send({
-            type: "agent_chunk",
-            agent: "hotel",
-            content: `${hotel.name} | ${hotel.area} | ★${hotel.rating} | ¥${hotel.price_cny_per_night}/晚 (共¥${hotel.total_cny})${marker}\n`,
-          });
-          await new Promise((r) => setTimeout(r, 200));
-        }
-        send({
-          type: "agent_done",
-          agent: "hotel",
-          trace: hotelResult.trace,
-        });
-        traces.push(hotelResult.trace);
-
-        // --- Phase 2: Run Planner agent (streams) ---
+        // --- Phase 1: Run Researcher A and B in parallel ---
         send({
           type: "agent_start",
-          agent: "planner",
-          action: "generate_itinerary",
+          agent: "researcher_a",
+          action: "research",
+        });
+        send({
+          type: "agent_start",
+          agent: "researcher_b",
+          action: "research",
         });
 
-        const plannerGen = streamPlanner(taskId, query);
-        let plannerResult: { content: string; trace: ContributionTrace } | undefined;
+        const [resultA, resultB] = await Promise.all([
+          runWorkerAgent(
+            taskId,
+            "researcher_a",
+            decomposition.subtask_a,
+            query,
+            resolvedConfig
+          ),
+          runWorkerAgent(
+            taskId,
+            "researcher_b",
+            decomposition.subtask_b,
+            query,
+            resolvedConfig
+          ),
+        ]);
+
+        // Stream researcher A results
+        const linesA = resultA.content.split("\n");
+        for (const line of linesA) {
+          send({
+            type: "agent_chunk",
+            agent: "researcher_a",
+            content: line + "\n",
+          });
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        send({
+          type: "agent_done",
+          agent: "researcher_a",
+          trace: resultA.trace,
+        });
+        traces.push(resultA.trace);
+
+        // Stream researcher B results
+        const linesB = resultB.content.split("\n");
+        for (const line of linesB) {
+          send({
+            type: "agent_chunk",
+            agent: "researcher_b",
+            content: line + "\n",
+          });
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        send({
+          type: "agent_done",
+          agent: "researcher_b",
+          trace: resultB.trace,
+        });
+        traces.push(resultB.trace);
+
+        // --- Phase 2: Run Synthesizer (streams) ---
+        send({
+          type: "agent_start",
+          agent: "synthesizer",
+          action: "synthesize",
+        });
+
+        const synthGen = streamSynthesizer(
+          taskId,
+          query,
+          decomposition.synthesis_prompt,
+          {
+            researcher_a: resultA.content,
+            researcher_b: resultB.content,
+          },
+          resolvedConfig
+        );
+        let synthResult:
+          | { content: string; trace: ContributionTrace }
+          | undefined;
 
         while (true) {
-          const { done, value } = await plannerGen.next();
+          const { done, value } = await synthGen.next();
           if (done) {
-            plannerResult = value;
+            synthResult = value;
             break;
           }
-          send({ type: "agent_chunk", agent: "planner", content: value });
+          send({ type: "agent_chunk", agent: "synthesizer", content: value });
         }
 
-        if (plannerResult) {
+        if (synthResult) {
           send({
             type: "agent_done",
-            agent: "planner",
-            trace: plannerResult.trace,
+            agent: "synthesizer",
+            trace: synthResult.trace,
           });
-          traces.push(plannerResult.trace);
+          traces.push(synthResult.trace);
         }
 
         // --- Phase 3: Verify traces and calculate Shapley ---
-        // Verify all signatures
         for (const trace of traces) {
           const valid = verifyTrace(trace);
           if (!valid) {
@@ -110,11 +152,9 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        // Calculate Shapley values
         const shapleyResult = calculateShapley(taskId, payment_usdc || 10);
         send({ type: "shapley_result", result: shapleyResult });
 
-        // Task complete
         send({ type: "task_complete", task_id: taskId });
       } catch (error) {
         send({

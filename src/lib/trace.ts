@@ -4,12 +4,12 @@ import { AGENT_ADDRESSES } from "./shapley";
 
 // Test private keys for demo (DO NOT use in production)
 const AGENT_PRIVATE_KEYS: Record<AgentId, string> = {
-  planner:
-    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-  flight:
+  researcher_a:
     "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-  hotel:
+  researcher_b:
     "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
+  synthesizer:
+    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
 };
 
 // Create a signed contribution trace for an agent

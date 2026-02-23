@@ -1,103 +1,156 @@
 "use client";
 
-import { useState, useCallback } from "react";
-import { SSEEvent, ContributionTrace, ShapleyResult, AgentId } from "@/lib/types";
+import { useState, useEffect, useCallback } from "react";
+import {
+  SSEEvent,
+  ContributionTrace,
+  ShapleyResult,
+  AgentId,
+  TaskDecomposition,
+  LLMConfig,
+} from "@/lib/types";
 import TaskInput from "@/components/TaskInput";
 import AgentFlow from "@/components/AgentFlow";
 import SplitResult from "@/components/SplitResult";
+import Settings from "@/components/Settings";
+
+const LLM_STORAGE_KEY = "fairsplit_llm_config";
 
 type AppPhase = "input" | "running" | "result";
 
 export default function Home() {
   const [phase, setPhase] = useState<AppPhase>("input");
   const [agentOutputs, setAgentOutputs] = useState<Record<AgentId, string>>({
-    planner: "",
-    flight: "",
-    hotel: "",
+    researcher_a: "",
+    researcher_b: "",
+    synthesizer: "",
   });
   const [activeAgents, setActiveAgents] = useState<Set<AgentId>>(new Set());
-  const [completedAgents, setCompletedAgents] = useState<Set<AgentId>>(new Set());
+  const [completedAgents, setCompletedAgents] = useState<Set<AgentId>>(
+    new Set()
+  );
   const [traces, setTraces] = useState<ContributionTrace[]>([]);
-  const [shapleyResult, setShapleyResult] = useState<ShapleyResult | null>(null);
+  const [shapleyResult, setShapleyResult] = useState<ShapleyResult | null>(
+    null
+  );
   const [paymentUsdc, setPaymentUsdc] = useState(10);
+  const [decomposition, setDecomposition] =
+    useState<TaskDecomposition | null>(null);
+  const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
-  const handleSubmit = useCallback(async (query: string, payment: number) => {
-    setPaymentUsdc(payment);
-    setPhase("running");
-    setAgentOutputs({ planner: "", flight: "", hotel: "" });
-    setActiveAgents(new Set());
-    setCompletedAgents(new Set());
-    setTraces([]);
-    setShapleyResult(null);
-
+  // Load LLM config from localStorage on mount
+  useEffect(() => {
     try {
-      const response = await fetch("/api/task", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query, payment_usdc: payment }),
-      });
-
-      if (!response.body) throw new Error("No response body");
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (!line.startsWith("data: ")) continue;
-          const data = line.slice(6);
-          try {
-            const event: SSEEvent = JSON.parse(data);
-            switch (event.type) {
-              case "agent_start":
-                setActiveAgents((prev) => new Set([...prev, event.agent]));
-                break;
-              case "agent_chunk":
-                setAgentOutputs((prev) => ({
-                  ...prev,
-                  [event.agent]: prev[event.agent] + event.content,
-                }));
-                break;
-              case "agent_done":
-                setActiveAgents((prev) => {
-                  const next = new Set(prev);
-                  next.delete(event.agent);
-                  return next;
-                });
-                setCompletedAgents((prev) => new Set([...prev, event.agent]));
-                setTraces((prev) => [...prev, event.trace]);
-                break;
-              case "shapley_result":
-                setShapleyResult(event.result);
-                setPhase("result");
-                break;
-            }
-          } catch {
-            // Skip malformed events
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Task failed:", error);
-      setPhase("input");
+      const stored = localStorage.getItem(LLM_STORAGE_KEY);
+      if (stored) setLlmConfig(JSON.parse(stored));
+    } catch {
+      // Ignore parse errors
     }
   }, []);
 
+  const handleSaveConfig = useCallback((config: LLMConfig | null) => {
+    setLlmConfig(config);
+    if (config) {
+      localStorage.setItem(LLM_STORAGE_KEY, JSON.stringify(config));
+    } else {
+      localStorage.removeItem(LLM_STORAGE_KEY);
+    }
+  }, []);
+
+  const handleSubmit = useCallback(
+    async (query: string, payment: number) => {
+      setPaymentUsdc(payment);
+      setPhase("running");
+      setAgentOutputs({ researcher_a: "", researcher_b: "", synthesizer: "" });
+      setActiveAgents(new Set());
+      setCompletedAgents(new Set());
+      setTraces([]);
+      setShapleyResult(null);
+      setDecomposition(null);
+
+      try {
+        const response = await fetch("/api/task", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query,
+            payment_usdc: payment,
+            llm_config: llmConfig,
+          }),
+        });
+
+        if (!response.body) throw new Error("No response body");
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const data = line.slice(6);
+            try {
+              const event: SSEEvent = JSON.parse(data);
+              switch (event.type) {
+                case "task_decomposed":
+                  setDecomposition(event.decomposition);
+                  break;
+                case "agent_start":
+                  setActiveAgents(
+                    (prev) => new Set([...prev, event.agent])
+                  );
+                  break;
+                case "agent_chunk":
+                  setAgentOutputs((prev) => ({
+                    ...prev,
+                    [event.agent]: prev[event.agent] + event.content,
+                  }));
+                  break;
+                case "agent_done":
+                  setActiveAgents((prev) => {
+                    const next = new Set(prev);
+                    next.delete(event.agent);
+                    return next;
+                  });
+                  setCompletedAgents(
+                    (prev) => new Set([...prev, event.agent])
+                  );
+                  setTraces((prev) => [...prev, event.trace]);
+                  break;
+                case "shapley_result":
+                  setShapleyResult(event.result);
+                  setPhase("result");
+                  break;
+              }
+            } catch {
+              // Skip malformed events
+            }
+          }
+        }
+      } catch (error) {
+        console.error("Task failed:", error);
+        setPhase("input");
+      }
+    },
+    [llmConfig]
+  );
+
   const handleReset = useCallback(() => {
     setPhase("input");
-    setAgentOutputs({ planner: "", flight: "", hotel: "" });
+    setAgentOutputs({ researcher_a: "", researcher_b: "", synthesizer: "" });
     setActiveAgents(new Set());
     setCompletedAgents(new Set());
     setTraces([]);
     setShapleyResult(null);
+    setDecomposition(null);
   }, []);
 
   return (
@@ -111,14 +164,26 @@ export default function Home() {
               AI Agent Fair Revenue Protocol
             </p>
           </div>
-          {phase !== "input" && (
+          <div className="flex items-center gap-4">
+            {phase !== "input" && (
+              <button
+                onClick={handleReset}
+                className="text-xs font-semibold tracking-wide uppercase text-muted-foreground transition-colors duration-200 hover:text-accent"
+              >
+                New Task
+              </button>
+            )}
             <button
-              onClick={handleReset}
-              className="text-xs font-semibold tracking-wide uppercase text-muted-foreground transition-colors duration-200 hover:text-accent"
+              onClick={() => setSettingsOpen(true)}
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors duration-200 hover:border-accent hover:text-accent"
+              title="LLM Settings"
             >
-              New Task
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M6.86 1.45a1.2 1.2 0 0 1 2.28 0l.27.83a1.2 1.2 0 0 0 1.52.72l.82-.3a1.2 1.2 0 0 1 1.61 1.14l-.04.87a1.2 1.2 0 0 0 1.01 1.24l.86.13a1.2 1.2 0 0 1 .57 2.17l-.7.52a1.2 1.2 0 0 0-.33 1.55l.44.76a1.2 1.2 0 0 1-.88 1.8l-.86.07a1.2 1.2 0 0 0-1.1 1.1l-.07.86a1.2 1.2 0 0 1-1.8.88l-.76-.44a1.2 1.2 0 0 0-1.55.33l-.52.7a1.2 1.2 0 0 1-2.17-.57l-.13-.86a1.2 1.2 0 0 0-1.24-1.01l-.87.04A1.2 1.2 0 0 1 1.47 12l.3-.82a1.2 1.2 0 0 0-.72-1.52l-.83-.27a1.2 1.2 0 0 1 0-2.28l.83-.27a1.2 1.2 0 0 0 .72-1.52l-.3-.82a1.2 1.2 0 0 1 1.14-1.61l.87.04a1.2 1.2 0 0 0 1.24-1.01l.13-.86z" />
+                <circle cx="8" cy="8" r="2.5" />
+              </svg>
             </button>
-          )}
+          </div>
         </div>
       </header>
 
@@ -147,7 +212,7 @@ export default function Home() {
               </p>
             </div>
 
-            <TaskInput onSubmit={handleSubmit} />
+            <TaskInput onSubmit={handleSubmit} llmConfig={llmConfig} />
           </div>
         )}
 
@@ -159,6 +224,7 @@ export default function Home() {
               activeAgents={activeAgents}
               completedAgents={completedAgents}
               traces={traces}
+              decomposition={decomposition}
             />
           </div>
         )}
@@ -181,6 +247,14 @@ export default function Home() {
           Built with Shapley Value &middot; Base Sepolia &middot; Hackathon Demo
         </p>
       </footer>
+
+      {/* Settings Modal */}
+      <Settings
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        llmConfig={llmConfig}
+        onSave={handleSaveConfig}
+      />
     </main>
   );
 }

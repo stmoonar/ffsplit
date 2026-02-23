@@ -7,25 +7,25 @@ import {
   ValueTable,
 } from "./types";
 
-// Hardcoded value table for "Tokyo 3-day trip" demo
+// Value table for generic 3-agent collaboration
 // V(S) represents the value a subset S of agents can produce
 const VALUE_TABLE: ValueTable = {
-  planner: 15,
-  flight: 10,
-  hotel: 10,
-  "flight,planner": 55,
-  "hotel,planner": 50,
-  "flight,hotel": 25,
-  "flight,hotel,planner": 100,
+  researcher_a: 10,
+  researcher_b: 10,
+  synthesizer: 15,
+  "researcher_a,synthesizer": 55,
+  "researcher_b,synthesizer": 50,
+  "researcher_a,researcher_b": 25,
+  "researcher_a,researcher_b,synthesizer": 100,
 };
 
-const ALL_AGENTS: AgentId[] = ["planner", "flight", "hotel"];
+const ALL_AGENTS: AgentId[] = ["researcher_a", "researcher_b", "synthesizer"];
 
 // Agent wallet addresses (test addresses)
 export const AGENT_ADDRESSES: Record<AgentId, string> = {
-  planner: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-  flight: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
-  hotel: "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+  researcher_a: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
+  researcher_b: "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
+  synthesizer: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
 };
 
 function subsetKey(agents: AgentId[]): SubsetKey {
@@ -58,9 +58,9 @@ export function calculateShapley(
 ): ShapleyResult {
   const allPerms = permutations(ALL_AGENTS);
   const marginalSums: Record<AgentId, number> = {
-    planner: 0,
-    flight: 0,
-    hotel: 0,
+    researcher_a: 0,
+    researcher_b: 0,
+    synthesizer: 0,
   };
   const permDetails: PermutationDetail[] = [];
 

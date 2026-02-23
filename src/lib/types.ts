@@ -1,5 +1,22 @@
+// LLM provider configuration
+export type LLMProvider = "openai" | "deepseek" | "kimi" | "claude";
+
+export interface LLMConfig {
+  provider: LLMProvider;
+  apiKey: string;
+  model?: string;
+  baseUrl?: string;
+}
+
 // Agent identifiers
-export type AgentId = "planner" | "flight" | "hotel";
+export type AgentId = "researcher_a" | "researcher_b" | "synthesizer";
+
+// Task decomposition result
+export interface TaskDecomposition {
+  subtask_a: string;
+  subtask_b: string;
+  synthesis_prompt: string;
+}
 
 // Contribution trace log for each agent call
 export interface ContributionTrace {
@@ -38,6 +55,7 @@ export type SSEEvent =
   | { type: "agent_start"; agent: AgentId; action: string }
   | { type: "agent_chunk"; agent: AgentId; content: string }
   | { type: "agent_done"; agent: AgentId; trace: ContributionTrace }
+  | { type: "task_decomposed"; decomposition: TaskDecomposition }
   | { type: "shapley_result"; result: ShapleyResult }
   | { type: "settlement_start" }
   | { type: "settlement_result"; result: SettlementResult }

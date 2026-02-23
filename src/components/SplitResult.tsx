@@ -10,15 +10,15 @@ interface SplitResultProps {
 }
 
 const AGENT_LABELS: Record<AgentId, string> = {
-  planner: "Planner Agent",
-  flight: "Flight Agent",
-  hotel: "Hotel Agent",
+  researcher_a: "Researcher A",
+  researcher_b: "Researcher B",
+  synthesizer: "Synthesizer",
 };
 
 const BAR_COLORS: Record<AgentId, string> = {
-  planner: "bg-accent",
-  flight: "bg-accent/70",
-  hotel: "bg-accent/50",
+  synthesizer: "bg-accent",
+  researcher_a: "bg-accent/70",
+  researcher_b: "bg-accent/50",
 };
 
 export default function SplitResult({
@@ -145,13 +145,13 @@ export default function SplitResult({
                 </thead>
                 <tbody className="text-foreground/80">
                   {[
-                    ["{Planner}", "15", "Framework only, no data"],
-                    ["{Flight}", "10", "Raw flight data, unusable alone"],
-                    ["{Hotel}", "10", "Raw hotel data, unusable alone"],
-                    ["{Planner, Flight}", "55", "Partial itinerary with flights"],
-                    ["{Planner, Hotel}", "50", "Partial itinerary with hotels"],
-                    ["{Flight, Hotel}", "25", "Data but no organization"],
-                    ["{P, F, H}", "100", "Complete deliverable"],
+                    ["{Researcher A}", "10", "Raw research data, unusable alone"],
+                    ["{Researcher B}", "10", "Raw research data, unusable alone"],
+                    ["{Synthesizer}", "15", "Framework only, no research data"],
+                    ["{Res.A, Synthesizer}", "55", "Partial report with one perspective"],
+                    ["{Res.B, Synthesizer}", "50", "Partial report with one perspective"],
+                    ["{Res.A, Res.B}", "25", "Data but no synthesis/organization"],
+                    ["{A, B, S}", "100", "Complete deliverable"],
                   ].map(([subset, value, rationale]) => (
                     <tr key={subset} className="border-b border-border/50">
                       <td className="px-3 py-2">{subset}</td>
@@ -179,13 +179,13 @@ export default function SplitResult({
                       Order
                     </th>
                     <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
-                      Planner
+                      Res. A
                     </th>
                     <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
-                      Flight
+                      Res. B
                     </th>
                     <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
-                      Hotel
+                      Synth.
                     </th>
                   </tr>
                 </thead>
@@ -194,30 +194,43 @@ export default function SplitResult({
                     <tr key={i} className="border-b border-border/50">
                       <td className="px-3 py-2">
                         {perm.order
-                          .map((a) => a[0].toUpperCase())
+                          .map((a) =>
+                            a === "researcher_a"
+                              ? "A"
+                              : a === "researcher_b"
+                                ? "B"
+                                : "S"
+                          )
                           .join(" → ")}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {perm.marginals.planner}
+                        {perm.marginals.researcher_a}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {perm.marginals.flight}
+                        {perm.marginals.researcher_b}
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {perm.marginals.hotel}
+                        {perm.marginals.synthesizer}
                       </td>
                     </tr>
                   ))}
                   <tr className="border-t-2 border-accent/30 font-semibold">
                     <td className="px-3 py-2 text-accent">Average</td>
-                    {(["planner", "flight", "hotel"] as AgentId[]).map(
-                      (agent) => (
-                        <td key={agent} className="px-3 py-2 text-right text-accent">
-                          {result.agents.find((a) => a.agent === agent)
-                            ?.shapley_value}
-                        </td>
-                      )
-                    )}
+                    {(
+                      [
+                        "researcher_a",
+                        "researcher_b",
+                        "synthesizer",
+                      ] as AgentId[]
+                    ).map((agent) => (
+                      <td
+                        key={agent}
+                        className="px-3 py-2 text-right text-accent"
+                      >
+                        {result.agents.find((a) => a.agent === agent)
+                          ?.shapley_value}
+                      </td>
+                    ))}
                   </tr>
                 </tbody>
               </table>
@@ -253,7 +266,7 @@ export default function SplitResult({
                       Equal Split (33%)
                     </th>
                     <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
-                      By API Calls
+                      By Token Count
                     </th>
                     <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-accent">
                       Shapley (FairSplit)
@@ -263,26 +276,29 @@ export default function SplitResult({
                 <tbody className="text-foreground/80">
                   {[
                     {
-                      agent: "Planner",
+                      agent: "Researcher A",
+                      id: "researcher_a",
                       equal: 3.33,
-                      calls: 1.67,
-                      callNote: "1 call",
+                      tokens: 3.5,
+                      tokenNote: "~350 tokens",
                     },
                     {
-                      agent: "Flight",
+                      agent: "Researcher B",
+                      id: "researcher_b",
                       equal: 3.33,
-                      calls: 5.0,
-                      callNote: "3 calls",
+                      tokens: 3.5,
+                      tokenNote: "~350 tokens",
                     },
                     {
-                      agent: "Hotel",
+                      agent: "Synthesizer",
+                      id: "synthesizer",
                       equal: 3.33,
-                      calls: 3.33,
-                      callNote: "2 calls",
+                      tokens: 3.0,
+                      tokenNote: "~400 tokens",
                     },
                   ].map((row, i) => {
                     const shapleyAgent = result.agents.find(
-                      (a) => a.agent === row.agent.toLowerCase()
+                      (a) => a.agent === row.id
                     );
                     return (
                       <tr key={i} className="border-b border-border/50">
@@ -293,9 +309,9 @@ export default function SplitResult({
                           {row.equal} USDC
                         </td>
                         <td className="px-3 py-2 text-right">
-                          {row.calls} USDC
+                          {row.tokens} USDC
                           <span className="ml-1 text-[10px] text-muted-foreground">
-                            ({row.callNote})
+                            ({row.tokenNote})
                           </span>
                         </td>
                         <td className="px-3 py-2 text-right font-semibold text-accent">
@@ -308,9 +324,10 @@ export default function SplitResult({
               </table>
             </div>
             <p className="mt-4 text-sm text-muted-foreground">
-              Shapley Value rewards Planner&apos;s critical coordination role
-              fairly, while fixed split and call-count methods either
-              under-reward or over-reward agents based on superficial metrics.
+              Shapley Value rewards the Synthesizer&apos;s critical coordination
+              role fairly — it&apos;s the key node for task closure. Fixed split
+              and token-count methods either under-reward or over-reward agents
+              based on superficial metrics.
             </p>
           </div>
         )}

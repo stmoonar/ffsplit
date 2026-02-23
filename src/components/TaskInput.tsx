@@ -1,13 +1,23 @@
 "use client";
 
 import { useState } from "react";
+import { LLMConfig } from "@/lib/types";
+import { PROVIDER_LABELS } from "@/lib/llm";
 
 interface TaskInputProps {
   onSubmit: (query: string, payment: number) => void;
+  llmConfig: LLMConfig | null;
 }
 
-export default function TaskInput({ onSubmit }: TaskInputProps) {
-  const [query, setQuery] = useState("帮我规划东京 3 日游，预算 5000 元以内");
+const EXAMPLE_PROMPTS = [
+  { label: "旅行规划", text: "帮我规划东京 3 日游，预算 5000 元以内" },
+  { label: "技术对比", text: "对比 React、Vue 和 Svelte 框架的优劣势，帮我选一个适合中型项目的" },
+  { label: "商业分析", text: "分析 2025 年 AI Agent 市场的发展趋势和创业机会" },
+  { label: "学习计划", text: "制定一个 30 天的 Rust 编程语言学习计划，我有 Python 基础" },
+];
+
+export default function TaskInput({ onSubmit, llmConfig }: TaskInputProps) {
+  const [query, setQuery] = useState("");
   const [payment, setPayment] = useState(10);
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -20,16 +30,30 @@ export default function TaskInput({ onSubmit }: TaskInputProps) {
     <div className="mx-auto max-w-2xl">
       <form onSubmit={handleSubmit}>
         {/* Task input */}
-        <div className="mb-8">
+        <div className="mb-4">
           <label className="small-caps mb-3 block text-muted-foreground">
             Task Description
           </label>
           <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Describe your task for the AI agents..."
+            placeholder="描述你想让 AI Agents 协作完成的任务..."
             className="h-32 w-full resize-none rounded-lg border border-border bg-transparent px-5 py-4 font-sans text-base text-foreground transition-colors duration-200 placeholder:text-muted-foreground/60 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
           />
+        </div>
+
+        {/* Example prompts */}
+        <div className="mb-8 flex flex-wrap gap-2">
+          {EXAMPLE_PROMPTS.map((example) => (
+            <button
+              key={example.label}
+              type="button"
+              onClick={() => setQuery(example.text)}
+              className="rounded-full border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors duration-200 hover:border-accent hover:text-accent"
+            >
+              {example.label}
+            </button>
+          ))}
         </div>
 
         {/* Payment amount */}
@@ -63,19 +87,19 @@ export default function TaskInput({ onSubmit }: TaskInputProps) {
           <div className="grid grid-cols-3 gap-4">
             {[
               {
-                name: "Planner",
+                name: "Researcher A",
+                role: "Data Collector",
+                desc: "Investigates background & key information",
+              },
+              {
+                name: "Researcher B",
+                role: "Data Collector",
+                desc: "Gathers data, cases & solutions",
+              },
+              {
+                name: "Synthesizer",
                 role: "Coordinator",
-                desc: "Generates itinerary framework",
-              },
-              {
-                name: "Flight",
-                role: "Data Provider",
-                desc: "Searches flight options",
-              },
-              {
-                name: "Hotel",
-                role: "Data Provider",
-                desc: "Searches hotel options",
+                desc: "Combines research into final report",
               },
             ].map((agent) => (
               <div
@@ -94,10 +118,21 @@ export default function TaskInput({ onSubmit }: TaskInputProps) {
           </div>
         </div>
 
-        {/* Submit */}
+        {/* Model status + Submit */}
+        <div className="mb-2 flex items-center justify-center gap-2 text-xs text-muted-foreground">
+          <span
+            className={`inline-block h-1.5 w-1.5 rounded-full ${
+              llmConfig ? "bg-green-500" : "bg-amber-400"
+            }`}
+          />
+          {llmConfig
+            ? `${PROVIDER_LABELS[llmConfig.provider]} · ${llmConfig.model || "default"}`
+            : "Mock Mode — configure LLM in settings ⚙"}
+        </div>
         <button
           type="submit"
-          className="h-12 w-full rounded-md bg-accent text-base font-medium tracking-wide text-accent-foreground shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-accent-secondary hover:shadow-md active:translate-y-0"
+          disabled={!query.trim()}
+          className="h-12 w-full rounded-md bg-accent text-base font-medium tracking-wide text-accent-foreground shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-accent-secondary hover:shadow-md active:translate-y-0 disabled:opacity-40 disabled:hover:translate-y-0 disabled:hover:shadow-sm"
         >
           Start Agent Collaboration & Pay {payment} USDC
         </button>

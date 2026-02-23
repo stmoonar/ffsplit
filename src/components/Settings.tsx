@@ -1,0 +1,280 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import { LLMConfig, LLMProvider } from "@/lib/types";
+import {
+  PROVIDER_LABELS,
+  getDefaultModel,
+  getDefaultBaseUrl,
+} from "@/lib/llm";
+
+interface SettingsProps {
+  isOpen: boolean;
+  onClose: () => void;
+  llmConfig: LLMConfig | null;
+  onSave: (config: LLMConfig | null) => void;
+}
+
+const PROVIDERS: LLMProvider[] = ["openai", "claude", "deepseek", "kimi"];
+
+const PROVIDER_ICONS: Record<LLMProvider, string> = {
+  openai: "◈",
+  claude: "◉",
+  deepseek: "◆",
+  kimi: "◇",
+};
+
+export default function Settings({
+  isOpen,
+  onClose,
+  llmConfig,
+  onSave,
+}: SettingsProps) {
+  const [provider, setProvider] = useState<LLMProvider>(
+    llmConfig?.provider || "openai"
+  );
+  const [apiKey, setApiKey] = useState(llmConfig?.apiKey || "");
+  const [model, setModel] = useState(
+    llmConfig?.model || getDefaultModel("openai")
+  );
+  const [baseUrl, setBaseUrl] = useState(
+    llmConfig?.baseUrl || ""
+  );
+  const [showKey, setShowKey] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [closing, setClosing] = useState(false);
+
+  // Sync form when llmConfig prop changes
+  useEffect(() => {
+    if (isOpen) {
+      setProvider(llmConfig?.provider || "openai");
+      setApiKey(llmConfig?.apiKey || "");
+      setModel(llmConfig?.model || getDefaultModel(llmConfig?.provider || "openai"));
+      setBaseUrl(llmConfig?.baseUrl || "");
+      setShowKey(false);
+      setClosing(false);
+    }
+  }, [isOpen, llmConfig]);
+
+  // Update model default when provider changes
+  const handleProviderChange = useCallback((p: LLMProvider) => {
+    setProvider(p);
+    setModel(getDefaultModel(p));
+    setBaseUrl("");
+  }, []);
+
+  const handleClose = useCallback(() => {
+    setClosing(true);
+    setTimeout(onClose, 200);
+  }, [onClose]);
+
+  const handleSave = useCallback(() => {
+    if (!apiKey.trim()) {
+      onSave(null);
+    } else {
+      onSave({
+        provider,
+        apiKey: apiKey.trim(),
+        model: model.trim() || undefined,
+        baseUrl: baseUrl.trim() || undefined,
+      });
+    }
+    handleClose();
+  }, [provider, apiKey, model, baseUrl, onSave, handleClose]);
+
+  const handleClear = useCallback(() => {
+    setApiKey("");
+    setModel(getDefaultModel(provider));
+    setBaseUrl("");
+    onSave(null);
+    handleClose();
+  }, [provider, onSave, handleClose]);
+
+  if (!isOpen) return null;
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div
+        className={`fixed inset-0 z-50 bg-foreground/20 backdrop-blur-sm transition-opacity duration-200 ${closing ? "opacity-0" : "opacity-100"}`}
+        onClick={handleClose}
+      />
+
+      {/* Modal */}
+      <div
+        className={`fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none`}
+      >
+        <div
+          className={`pointer-events-auto w-full max-w-lg rounded-xl border border-border bg-background shadow-lg transition-all duration-200 ${closing ? "scale-95 opacity-0" : "scale-100 opacity-100"}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between border-b border-border px-6 py-4">
+            <div>
+              <h2 className="font-serif text-xl tracking-tight">
+                LLM Settings
+              </h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Configure the AI model for agent collaboration
+              </p>
+            </div>
+            <button
+              onClick={handleClose}
+              className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Body */}
+          <div className="px-6 py-5 space-y-6">
+            {/* Provider Selection */}
+            <div>
+              <label className="small-caps mb-3 block text-muted-foreground">
+                Provider
+              </label>
+              <div className="grid grid-cols-4 gap-2">
+                {PROVIDERS.map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => handleProviderChange(p)}
+                    className={`group relative rounded-lg border px-3 py-3 text-center transition-all duration-200 ${
+                      provider === p
+                        ? "border-accent bg-accent/5 shadow-sm"
+                        : "border-border hover:border-border-hover"
+                    }`}
+                  >
+                    <span
+                      className={`block text-lg leading-none ${
+                        provider === p
+                          ? "text-accent"
+                          : "text-muted-foreground/50 group-hover:text-muted-foreground"
+                      }`}
+                    >
+                      {PROVIDER_ICONS[p]}
+                    </span>
+                    <span
+                      className={`mt-1.5 block text-[11px] font-semibold tracking-wide ${
+                        provider === p
+                          ? "text-accent"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {PROVIDER_LABELS[p].split(" ")[0]}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* API Key */}
+            <div>
+              <label className="small-caps mb-2 block text-muted-foreground">
+                API Key
+              </label>
+              <div className="relative">
+                <input
+                  type={showKey ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={`Enter your ${PROVIDER_LABELS[provider]} API key...`}
+                  className="h-11 w-full rounded-lg border border-border bg-transparent px-4 pr-16 font-mono text-sm text-foreground transition-colors duration-200 placeholder:text-muted-foreground/40 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowKey(!showKey)}
+                  className="absolute right-1 top-1/2 -translate-y-1/2 rounded-md px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:text-accent"
+                >
+                  {showKey ? "Hide" : "Show"}
+                </button>
+              </div>
+              <p className="mt-1.5 text-[11px] text-muted-foreground/60">
+                Your key is stored locally and sent directly to the provider.
+                Never stored on our servers.
+              </p>
+            </div>
+
+            {/* Model */}
+            <div>
+              <label className="small-caps mb-2 block text-muted-foreground">
+                Model
+              </label>
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={getDefaultModel(provider)}
+                className="h-11 w-full rounded-lg border border-border bg-transparent px-4 font-mono text-sm text-foreground transition-colors duration-200 placeholder:text-muted-foreground/40 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+              />
+            </div>
+
+            {/* Advanced: Base URL */}
+            <div>
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(!showAdvanced)}
+                className="flex items-center gap-2 text-xs text-muted-foreground transition-colors hover:text-accent"
+              >
+                <span
+                  className={`inline-block transition-transform duration-200 ${showAdvanced ? "rotate-90" : ""}`}
+                >
+                  ▸
+                </span>
+                <span className="font-semibold uppercase tracking-wide">
+                  Advanced
+                </span>
+              </button>
+
+              {showAdvanced && (
+                <div className="mt-3 animate-slide-up">
+                  <label className="small-caps mb-2 block text-muted-foreground">
+                    Custom Base URL
+                  </label>
+                  <input
+                    type="text"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    placeholder={getDefaultBaseUrl(provider)}
+                    className="h-11 w-full rounded-lg border border-border bg-transparent px-4 font-mono text-sm text-foreground transition-colors duration-200 placeholder:text-muted-foreground/40 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+                  />
+                  <p className="mt-1.5 text-[11px] text-muted-foreground/60">
+                    Override the default API endpoint. Useful for proxies or
+                    self-hosted models.
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="flex items-center justify-between border-t border-border px-6 py-4">
+            <button
+              type="button"
+              onClick={handleClear}
+              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:text-red-500"
+            >
+              Clear & Use Mock
+            </button>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={handleClose}
+                className="h-9 rounded-md border border-border px-4 text-sm font-medium text-muted-foreground transition-colors hover:border-border-hover hover:text-foreground"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSave}
+                className="h-9 rounded-md bg-accent px-5 text-sm font-medium tracking-wide text-accent-foreground shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:bg-accent-secondary hover:shadow-md active:translate-y-0"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
