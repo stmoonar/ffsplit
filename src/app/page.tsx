@@ -1,65 +1,186 @@
-import Image from "next/image";
+"use client";
+
+import { useState, useCallback } from "react";
+import { SSEEvent, ContributionTrace, ShapleyResult, AgentId } from "@/lib/types";
+import TaskInput from "@/components/TaskInput";
+import AgentFlow from "@/components/AgentFlow";
+import SplitResult from "@/components/SplitResult";
+
+type AppPhase = "input" | "running" | "result";
 
 export default function Home() {
+  const [phase, setPhase] = useState<AppPhase>("input");
+  const [agentOutputs, setAgentOutputs] = useState<Record<AgentId, string>>({
+    planner: "",
+    flight: "",
+    hotel: "",
+  });
+  const [activeAgents, setActiveAgents] = useState<Set<AgentId>>(new Set());
+  const [completedAgents, setCompletedAgents] = useState<Set<AgentId>>(new Set());
+  const [traces, setTraces] = useState<ContributionTrace[]>([]);
+  const [shapleyResult, setShapleyResult] = useState<ShapleyResult | null>(null);
+  const [paymentUsdc, setPaymentUsdc] = useState(10);
+
+  const handleSubmit = useCallback(async (query: string, payment: number) => {
+    setPaymentUsdc(payment);
+    setPhase("running");
+    setAgentOutputs({ planner: "", flight: "", hotel: "" });
+    setActiveAgents(new Set());
+    setCompletedAgents(new Set());
+    setTraces([]);
+    setShapleyResult(null);
+
+    try {
+      const response = await fetch("/api/task", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query, payment_usdc: payment }),
+      });
+
+      if (!response.body) throw new Error("No response body");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          try {
+            const event: SSEEvent = JSON.parse(data);
+            switch (event.type) {
+              case "agent_start":
+                setActiveAgents((prev) => new Set([...prev, event.agent]));
+                break;
+              case "agent_chunk":
+                setAgentOutputs((prev) => ({
+                  ...prev,
+                  [event.agent]: prev[event.agent] + event.content,
+                }));
+                break;
+              case "agent_done":
+                setActiveAgents((prev) => {
+                  const next = new Set(prev);
+                  next.delete(event.agent);
+                  return next;
+                });
+                setCompletedAgents((prev) => new Set([...prev, event.agent]));
+                setTraces((prev) => [...prev, event.trace]);
+                break;
+              case "shapley_result":
+                setShapleyResult(event.result);
+                setPhase("result");
+                break;
+            }
+          } catch {
+            // Skip malformed events
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Task failed:", error);
+      setPhase("input");
+    }
+  }, []);
+
+  const handleReset = useCallback(() => {
+    setPhase("input");
+    setAgentOutputs({ planner: "", flight: "", hotel: "" });
+    setActiveAgents(new Set());
+    setCompletedAgents(new Set());
+    setTraces([]);
+    setShapleyResult(null);
+  }, []);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <main className="min-h-screen">
+      {/* Header */}
+      <header className="border-b border-border">
+        <div className="mx-auto flex max-w-5xl items-center justify-between px-8 py-6">
+          <div>
+            <h1 className="font-serif text-2xl tracking-tight">FairSplit</h1>
+            <p className="small-caps mt-1 text-muted-foreground">
+              AI Agent Fair Revenue Protocol
+            </p>
+          </div>
+          {phase !== "input" && (
+            <button
+              onClick={handleReset}
+              className="text-xs font-semibold tracking-wide uppercase text-muted-foreground transition-colors duration-200 hover:text-accent"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              New Task
+            </button>
+          )}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+      </header>
+
+      <div className="mx-auto max-w-5xl px-8 py-12">
+        {/* Phase 1: Task Input */}
+        {phase === "input" && (
+          <div className="animate-fade-in">
+            {/* Hero section */}
+            <div className="mb-16 text-center">
+              <div className="mb-6 flex items-center justify-center gap-4">
+                <span className="h-px flex-1 max-w-[120px] bg-border" />
+                <span className="small-caps text-accent">
+                  Shapley Value Protocol
+                </span>
+                <span className="h-px flex-1 max-w-[120px] bg-border" />
+              </div>
+              <h2 className="font-serif text-5xl leading-tight tracking-tight md:text-7xl">
+                Fair Revenue
+                <br />
+                <span className="italic text-accent">Splitting</span>
+              </h2>
+              <p className="mx-auto mt-6 max-w-xl text-lg text-muted-foreground">
+                When multiple AI Agents collaborate on a task, how should the
+                revenue be split? FairSplit uses Nobel Prize-winning game theory
+                to calculate each agent&apos;s fair share.
+              </p>
+            </div>
+
+            <TaskInput onSubmit={handleSubmit} />
+          </div>
+        )}
+
+        {/* Phase 2: Agent Collaboration */}
+        {(phase === "running" || phase === "result") && (
+          <div className="animate-fade-in">
+            <AgentFlow
+              agentOutputs={agentOutputs}
+              activeAgents={activeAgents}
+              completedAgents={completedAgents}
+              traces={traces}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+          </div>
+        )}
+
+        {/* Phase 3: Split Result */}
+        {phase === "result" && shapleyResult && (
+          <div className="mt-16 animate-slide-up">
+            <SplitResult
+              result={shapleyResult}
+              paymentUsdc={paymentUsdc}
+              traces={traces}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Footer */}
+      <footer className="border-t border-border py-8 text-center">
+        <p className="small-caps text-muted-foreground">
+          Built with Shapley Value &middot; Base Sepolia &middot; Hackathon Demo
+        </p>
+      </footer>
+    </main>
   );
 }

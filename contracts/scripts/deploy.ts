@@ -1,0 +1,27 @@
+import { ethers } from "hardhat";
+
+async function main() {
+  const [deployer] = await ethers.getSigners();
+  console.log("Deploying with account:", deployer.address);
+
+  // For demo: deployer is also the oracle
+  const oracleAddress = deployer.address;
+
+  const SplitVault = await ethers.getContractFactory("SplitVault");
+  const vault = await SplitVault.deploy(oracleAddress);
+  await vault.waitForDeployment();
+
+  const address = await vault.getAddress();
+  console.log("SplitVault deployed to:", address);
+  console.log("Oracle address:", oracleAddress);
+
+  // Log for easy copy-paste into .env
+  console.log("\n--- Add to .env.local ---");
+  console.log(`NEXT_PUBLIC_VAULT_ADDRESS=${address}`);
+  console.log(`ORACLE_ADDRESS=${oracleAddress}`);
+}
+
+main().catch((error) => {
+  console.error(error);
+  process.exitCode = 1;
+});
