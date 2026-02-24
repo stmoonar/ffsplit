@@ -57,12 +57,30 @@ export interface AgentOutput {
   done: boolean;
 }
 
-// On-chain settlement result
+// On-chain settlement result (after tx submitted by frontend/relayer)
 export interface SettlementResult {
-  splitTxHash: string;
   settleTxHash: string;
-  createTxHash?: string;
   explorerBaseUrl: string;
+}
+
+// EIP-712 signed settlement data from oracle (for permissionless submission)
+export interface SettlementSignatureData {
+  taskId: string;
+  agents: string[];
+  shares: string[]; // stringified bigints
+  signature: string;
+  vault_address: string;
+  explorerBaseUrl: string;
+}
+
+// x402 payment info returned in 402 response
+export interface PaymentRequirement {
+  payment_required: true;
+  vault_address: string;
+  usdc_address: string;
+  amount_usdc: number;
+  amount_raw: string;
+  chain_id: number;
 }
 
 // SSE event types sent to frontend
@@ -72,7 +90,9 @@ export type SSEEvent =
   | { type: "agent_done"; agent: AgentId; trace: ContributionTrace }
   | { type: "task_decomposed"; decomposition: TaskDecomposition }
   | { type: "shapley_result"; result: ShapleyResult }
+  | { type: "payment_verified"; tx_hash: string }
   | { type: "settlement_start" }
+  | { type: "settlement_signature"; data: SettlementSignatureData }
   | { type: "settlement_result"; result: SettlementResult }
   | { type: "task_complete"; task_id: string }
   | { type: "error"; message: string };

@@ -1,158 +1,234 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import { SplitVault } from "../typechain-types";
+import { SplitVault, MockUSDC } from "../typechain-types";
 
 describe("SplitVault", function () {
   let vault: SplitVault;
+  let usdc: MockUSDC;
   let oracle: any, payer: any, planner: any, flight: any, hotel: any;
 
   const TASK_ID = ethers.id("task-test-001");
+  const PAYMENT = 10_000_000n; // 10 USDC (6 decimals)
+
+  async function signSplit(
+    signer: any,
+    vaultAddress: string,
+    taskId: string,
+    agents: string[],
+    shares: bigint[]
+  ): Promise<string> {
+    const domain = {
+      name: "SplitVault",
+      version: "1",
+      chainId: (await ethers.provider.getNetwork()).chainId,
+      verifyingContract: vaultAddress,
+    };
+
+    const types = {
+      Split: [
+        { name: "taskId", type: "bytes32" },
+        { name: "agents", type: "address[]" },
+        { name: "shares", type: "uint256[]" },
+      ],
+    };
+
+    const value = { taskId, agents, shares };
+
+    return signer.signTypedData(domain, types, value);
+  }
 
   beforeEach(async function () {
     [oracle, payer, planner, flight, hotel] = await ethers.getSigners();
 
+    // Deploy MockUSDC and mint to payer
+    const MockUSDCFactory = await ethers.getContractFactory("MockUSDC");
+    usdc = await MockUSDCFactory.deploy(payer.address);
+
+    // Deploy SplitVault with USDC and oracle
     const SplitVaultFactory = await ethers.getContractFactory("SplitVault");
-    vault = await SplitVaultFactory.deploy(oracle.address);
+    vault = await SplitVaultFactory.deploy(
+      await usdc.getAddress(),
+      oracle.address
+    );
+
+    // Payer approves vault to spend USDC
+    await usdc
+      .connect(payer)
+      .approve(await vault.getAddress(), ethers.MaxUint256);
   });
 
   describe("createTask", function () {
-    it("should create a task and lock ETH", async function () {
+    it("should create a task and lock USDC", async function () {
       const agents = [planner.address, flight.address, hotel.address];
-      const payment = ethers.parseEther("0.01");
 
       await expect(
-        vault.connect(payer).createTask(TASK_ID, agents, { value: payment })
+        vault.connect(payer).createTask(TASK_ID, agents, PAYMENT)
       )
         .to.emit(vault, "TaskCreated")
-        .withArgs(TASK_ID, payer.address, agents, payment);
+        .withArgs(TASK_ID, payer.address, agents, PAYMENT);
 
       const task = await vault.getTask(TASK_ID);
       expect(task.payer).to.equal(payer.address);
       expect(task.agents).to.deep.equal(agents);
-      expect(task.totalAmount).to.equal(payment);
+      expect(task.totalAmount).to.equal(PAYMENT);
       expect(task.splitSubmitted).to.be.false;
       expect(task.settled).to.be.false;
+
+      // USDC transferred to vault
+      expect(await usdc.balanceOf(await vault.getAddress())).to.equal(PAYMENT);
     });
 
     it("should revert with no payment", async function () {
       const agents = [planner.address];
       await expect(
-        vault.connect(payer).createTask(TASK_ID, agents, { value: 0 })
+        vault.connect(payer).createTask(TASK_ID, agents, 0)
       ).to.be.revertedWithCustomError(vault, "NoPayment");
     });
 
     it("should revert with no agents", async function () {
       await expect(
-        vault
-          .connect(payer)
-          .createTask(TASK_ID, [], { value: ethers.parseEther("0.01") })
+        vault.connect(payer).createTask(TASK_ID, [], PAYMENT)
       ).to.be.revertedWithCustomError(vault, "NoAgents");
     });
 
     it("should revert on duplicate taskId", async function () {
       const agents = [planner.address];
-      const payment = ethers.parseEther("0.01");
-      await vault.connect(payer).createTask(TASK_ID, agents, { value: payment });
+      await vault.connect(payer).createTask(TASK_ID, agents, PAYMENT);
       await expect(
-        vault.connect(payer).createTask(TASK_ID, agents, { value: payment })
+        vault.connect(payer).createTask(TASK_ID, agents, PAYMENT)
       ).to.be.revertedWithCustomError(vault, "TaskAlreadyExists");
     });
   });
 
-  describe("submitSplit", function () {
+  describe("submitSplitAndSettle", function () {
+    const agents: string[] = [];
+
     beforeEach(async function () {
-      const agents = [planner.address, flight.address, hotel.address];
-      await vault
-        .connect(payer)
-        .createTask(TASK_ID, agents, { value: ethers.parseEther("0.01") });
+      agents.length = 0;
+      agents.push(planner.address, flight.address, hotel.address);
+      await vault.connect(payer).createTask(TASK_ID, agents, PAYMENT);
     });
 
-    it("should accept valid split from oracle", async function () {
-      // Shapley: Planner 44%, Flight 29%, Hotel 27%
-      const shares = [4417, 2917, 2666]; // sums to 10000
-      await expect(vault.connect(oracle).submitSplit(TASK_ID, shares))
+    it("should accept valid EIP-712 signed split and settle", async function () {
+      const shares = [4417n, 2917n, 2666n]; // sums to 10000
+
+      const signature = await signSplit(
+        oracle,
+        await vault.getAddress(),
+        TASK_ID,
+        agents,
+        shares
+      );
+
+      const plannerBefore = await usdc.balanceOf(planner.address);
+      const flightBefore = await usdc.balanceOf(flight.address);
+      const hotelBefore = await usdc.balanceOf(hotel.address);
+
+      await expect(
+        vault.submitSplitAndSettle(TASK_ID, shares, signature)
+      )
         .to.emit(vault, "SplitSubmitted")
-        .withArgs(TASK_ID, shares);
-    });
+        .to.emit(vault, "Settled");
 
-    it("should revert if not oracle", async function () {
-      await expect(
-        vault.connect(payer).submitSplit(TASK_ID, [3333, 3334, 3333])
-      ).to.be.revertedWithCustomError(vault, "OnlyOracle");
-    });
+      const plannerAfter = await usdc.balanceOf(planner.address);
+      const flightAfter = await usdc.balanceOf(flight.address);
+      const hotelAfter = await usdc.balanceOf(hotel.address);
 
-    it("should revert if shares don't sum to 10000", async function () {
-      await expect(
-        vault.connect(oracle).submitSplit(TASK_ID, [5000, 3000, 1000])
-      ).to.be.revertedWithCustomError(vault, "SharesSumInvalid");
-    });
-
-    it("should revert if shares length mismatch", async function () {
-      await expect(
-        vault.connect(oracle).submitSplit(TASK_ID, [5000, 5000])
-      ).to.be.revertedWithCustomError(vault, "SharesLengthMismatch");
-    });
-  });
-
-  describe("settle", function () {
-    const PAYMENT = ethers.parseEther("0.01"); // 10000000000000000 wei
-
-    beforeEach(async function () {
-      const agents = [planner.address, flight.address, hotel.address];
-      await vault.connect(payer).createTask(TASK_ID, agents, { value: PAYMENT });
-      // Planner 44.17%, Flight 29.17%, Hotel 26.66%
-      await vault.connect(oracle).submitSplit(TASK_ID, [4417, 2917, 2666]);
-    });
-
-    it("should distribute funds according to Shapley split", async function () {
-      const plannerBefore = await ethers.provider.getBalance(planner.address);
-      const flightBefore = await ethers.provider.getBalance(flight.address);
-      const hotelBefore = await ethers.provider.getBalance(hotel.address);
-
-      await expect(vault.settle(TASK_ID)).to.emit(vault, "Settled");
-
-      const plannerAfter = await ethers.provider.getBalance(planner.address);
-      const flightAfter = await ethers.provider.getBalance(flight.address);
-      const hotelAfter = await ethers.provider.getBalance(hotel.address);
-
-      // Planner: 0.01 ETH * 4417/10000 = 0.004417 ETH
+      // Planner: 10 USDC * 4417/10000 = 4.417 USDC = 4_417_000 units
       expect(plannerAfter - plannerBefore).to.equal(
         (PAYMENT * 4417n) / 10000n
       );
-      // Flight: 0.01 ETH * 2917/10000 = 0.002917 ETH
+      // Flight: 10 USDC * 2917/10000 = 2.917 USDC
       expect(flightAfter - flightBefore).to.equal(
         (PAYMENT * 2917n) / 10000n
       );
-      // Hotel gets remainder (avoids rounding dust)
+      // Hotel gets remainder (avoids dust)
       const expectedHotel =
         PAYMENT - (PAYMENT * 4417n) / 10000n - (PAYMENT * 2917n) / 10000n;
       expect(hotelAfter - hotelBefore).to.equal(expectedHotel);
 
       // Vault should be empty
-      expect(
-        await ethers.provider.getBalance(await vault.getAddress())
-      ).to.equal(0);
+      expect(await usdc.balanceOf(await vault.getAddress())).to.equal(0);
     });
 
-    it("should revert if split not submitted", async function () {
-      const newTaskId = ethers.id("task-no-split");
-      await vault
-        .connect(payer)
-        .createTask(newTaskId, [planner.address], {
-          value: ethers.parseEther("0.01"),
-        });
-      await expect(vault.settle(newTaskId)).to.be.revertedWithCustomError(
-        vault,
-        "SplitNotSubmitted"
+    it("should revert with invalid signature (wrong signer)", async function () {
+      const shares = [3333n, 3334n, 3333n];
+
+      // payer signs instead of oracle — should fail
+      const signature = await signSplit(
+        payer,
+        await vault.getAddress(),
+        TASK_ID,
+        agents,
+        shares
       );
+
+      await expect(
+        vault.submitSplitAndSettle(TASK_ID, shares, signature)
+      ).to.be.revertedWithCustomError(vault, "InvalidSignature");
     });
 
-    it("should revert on double settle", async function () {
-      await vault.settle(TASK_ID);
-      await expect(vault.settle(TASK_ID)).to.be.revertedWithCustomError(
-        vault,
-        "AlreadySettled"
+    it("should revert if shares don't sum to 10000", async function () {
+      const shares = [5000n, 3000n, 1000n];
+      const signature = await signSplit(
+        oracle,
+        await vault.getAddress(),
+        TASK_ID,
+        agents,
+        shares
       );
+
+      await expect(
+        vault.submitSplitAndSettle(TASK_ID, shares, signature)
+      ).to.be.revertedWithCustomError(vault, "SharesSumInvalid");
+    });
+
+    it("should revert if shares length mismatch", async function () {
+      const shares = [5000n, 5000n];
+      const signature = await signSplit(
+        oracle,
+        await vault.getAddress(),
+        TASK_ID,
+        agents,
+        shares
+      );
+
+      await expect(
+        vault.submitSplitAndSettle(TASK_ID, shares, signature)
+      ).to.be.revertedWithCustomError(vault, "SharesLengthMismatch");
+    });
+
+    it("should revert on double settlement", async function () {
+      const shares = [3333n, 3334n, 3333n];
+      const signature = await signSplit(
+        oracle,
+        await vault.getAddress(),
+        TASK_ID,
+        agents,
+        shares
+      );
+
+      await vault.submitSplitAndSettle(TASK_ID, shares, signature);
+
+      await expect(
+        vault.submitSplitAndSettle(TASK_ID, shares, signature)
+      ).to.be.revertedWithCustomError(vault, "SplitAlreadySubmitted");
+    });
+
+    it("should allow anyone to call submitSplitAndSettle (permissionless)", async function () {
+      const shares = [3333n, 3334n, 3333n];
+      const signature = await signSplit(
+        oracle,
+        await vault.getAddress(),
+        TASK_ID,
+        agents,
+        shares
+      );
+
+      // hotel (random third party) submits — should succeed
+      await expect(
+        vault.connect(hotel).submitSplitAndSettle(TASK_ID, shares, signature)
+      ).to.emit(vault, "Settled");
     });
   });
 });

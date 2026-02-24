@@ -1,17 +1,36 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { ethers } from "ethers";
 import { decomposeTask } from "@/lib/agents/decompose";
 import { runWorkerAgent } from "@/lib/agents/worker";
 import { streamSynthesizer } from "@/lib/agents/synthesizer";
 import { calculateShapley } from "@/lib/shapley";
 import { verifyTrace, getAgentAddress } from "@/lib/trace";
 import { SSEEvent, ContributionTrace, LLMConfig, ModelProfile } from "@/lib/types";
-import { isContractConfigured, submitSplitAndSettle } from "@/lib/contracts/vault";
+import {
+  isContractConfigured,
+  signSplitData,
+  verifyCreateTaskTx,
+  getVaultAddress,
+  getUsdcAddress,
+  getChainId,
+} from "@/lib/contracts/vault";
 
 function sseEncode(event: SSEEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
+// Parse x402 Authorization header: x402 tx="0x...", sig="0x..."
+function parseX402Auth(header: string | null): { tx: string; sig: string } | null {
+  if (!header || !header.startsWith("x402 ")) return null;
+  const params = header.slice(5);
+  const txMatch = params.match(/tx="(0x[a-fA-F0-9]+)"/);
+  const sigMatch = params.match(/sig="(0x[a-fA-F0-9]+)"/);
+  if (!txMatch || !sigMatch) return null;
+  return { tx: txMatch[1], sig: sigMatch[1] };
+}
+
 export async function POST(request: NextRequest) {
+  const body = await request.json();
   const {
     query,
     payment_usdc,
@@ -20,9 +39,87 @@ export async function POST(request: NextRequest) {
     agent_assignments,
     llm_config,
     agent_llm_configs,
-  } = await request.json();
+    task_id: clientTaskId,
+    sender_address: senderAddress,
+  } = body;
 
-  const taskId = `task-${Date.now().toString(36)}`;
+  // --- x402 Payment Protocol ---
+  const authHeader = request.headers.get("authorization");
+  const x402Auth = parseX402Auth(authHeader);
+
+  // Phase 0: If no payment credential and contract is configured, return 402
+  if (!x402Auth && isContractConfigured()) {
+    const chainId = await getChainId();
+    const amountUsdc = payment_usdc || 10;
+    // USDC has 6 decimals
+    const amountRaw = Math.floor(amountUsdc * 1_000_000).toString();
+
+    return NextResponse.json(
+      {
+        payment_required: true,
+        vault_address: getVaultAddress(),
+        usdc_address: getUsdcAddress(),
+        amount_usdc: amountUsdc,
+        amount_raw: amountRaw,
+        chain_id: chainId,
+      },
+      {
+        status: 402,
+        headers: {
+          "WWW-Authenticate": `x402 vault="${getVaultAddress()}", usdc="${getUsdcAddress()}", amount="${amountRaw}", chainId="${chainId}"`,
+        },
+      }
+    );
+  }
+
+  // Phase 0.5: Verify payment credential if provided
+  if (x402Auth && isContractConfigured()) {
+    // Recover signer from the ownership proof signature
+    const messageToSign = `x402-payment:${x402Auth.tx}`;
+    let recoveredAddress: string;
+    try {
+      recoveredAddress = ethers.verifyMessage(messageToSign, x402Auth.sig);
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid payment signature" },
+        { status: 401 }
+      );
+    }
+
+    // Verify the on-chain transaction
+    if (!clientTaskId || !senderAddress) {
+      return NextResponse.json(
+        { error: "Missing task_id or sender_address in request body" },
+        { status: 400 }
+      );
+    }
+
+    // Verify the signature matches the claimed sender
+    if (recoveredAddress.toLowerCase() !== senderAddress.toLowerCase()) {
+      return NextResponse.json(
+        { error: "Payment signature does not match sender_address" },
+        { status: 401 }
+      );
+    }
+
+    const amountRaw = BigInt(Math.floor((payment_usdc || 10) * 1_000_000));
+    const verification = await verifyCreateTaskTx(
+      x402Auth.tx,
+      clientTaskId,
+      amountRaw,
+      recoveredAddress
+    );
+
+    if (!verification.valid) {
+      return NextResponse.json(
+        { error: `Payment verification failed: ${verification.error}` },
+        { status: 402 }
+      );
+    }
+  }
+
+  // Use client-provided taskId (bound to payment) or generate one
+  const taskId = clientTaskId || `task-${Date.now().toString(36)}`;
 
   const profileMap = new Map<string, ModelProfile>();
   if (Array.isArray(model_profiles)) {
@@ -83,6 +180,11 @@ export async function POST(request: NextRequest) {
 
       try {
         const traces: ContributionTrace[] = [];
+
+        // Send payment verified event
+        if (x402Auth) {
+          send({ type: "payment_verified", tx_hash: x402Auth.tx });
+        }
 
         const decomposition = await decomposeTask(query, resolveConfig("decomposer"));
         send({ type: "task_decomposed", decomposition });
@@ -159,6 +261,7 @@ export async function POST(request: NextRequest) {
         const shapleyResult = calculateShapley(taskId, payment_usdc || 10, traces);
         send({ type: "shapley_result", result: shapleyResult });
 
+        // Phase 6: Generate EIP-712 settlement signature (permissionless)
         if (isContractConfigured()) {
           send({ type: "settlement_start" });
           try {
@@ -172,13 +275,13 @@ export async function POST(request: NextRequest) {
               sharesBasisPoints[0] += 10000 - bpSum;
             }
 
-            const paymentWei = BigInt(Math.floor((payment_usdc || 10) * 1e15));
+            const taskIdBytes32 = ethers.id(taskId);
 
-            const settlement = await submitSplitAndSettle(
-              taskId,
+            // Sign the split data instead of submitting directly
+            const signedData = await signSplitData(
+              taskIdBytes32,
               agents,
-              sharesBasisPoints,
-              paymentWei
+              sharesBasisPoints
             );
 
             const explorerBaseUrl =
@@ -187,20 +290,23 @@ export async function POST(request: NextRequest) {
                 ? ""
                 : "https://sepolia.basescan.org";
 
+            // Send settlement signature for frontend/relayer to submit
             send({
-              type: "settlement_result",
-              result: {
-                splitTxHash: settlement.splitTxHash,
-                settleTxHash: settlement.settleTxHash,
-                createTxHash: settlement.createTxHash,
+              type: "settlement_signature",
+              data: {
+                taskId: signedData.taskId,
+                agents: signedData.agents,
+                shares: signedData.shares.map((s) => s.toString()),
+                signature: signedData.signature,
+                vault_address: getVaultAddress(),
                 explorerBaseUrl,
               },
             });
           } catch (error) {
-            console.error("Settlement failed:", error);
+            console.error("Settlement signing failed:", error);
             send({
               type: "error",
-              message: `On-chain settlement failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+              message: `Settlement signing failed: ${error instanceof Error ? error.message : "Unknown error"}`,
             });
           }
         }

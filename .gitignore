@@ -40,3 +40,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+# hardhat generated
+/contracts/artifacts/
+/contracts/cache/
+/contracts/typechain-types/
+# contracts lockfile (pnpm workspace)
+/contracts/package-lock.json

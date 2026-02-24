@@ -1,91 +1,46 @@
 export const SPLIT_VAULT_ABI = [
   {
     inputs: [
-      {
-        internalType: "address",
-        name: "_oracle",
-        type: "address",
-      },
+      { internalType: "address", name: "_usdc", type: "address" },
+      { internalType: "address", name: "_oracle", type: "address" },
     ],
     stateMutability: "nonpayable",
     type: "constructor",
   },
+  { inputs: [], name: "AlreadySettled", type: "error" },
+  { inputs: [], name: "ECDSAInvalidSignature", type: "error" },
   {
-    inputs: [],
-    name: "AlreadySettled",
+    inputs: [{ internalType: "uint256", name: "length", type: "uint256" }],
+    name: "ECDSAInvalidSignatureLength",
     type: "error",
   },
   {
-    inputs: [],
-    name: "NoAgents",
+    inputs: [{ internalType: "bytes32", name: "s", type: "bytes32" }],
+    name: "ECDSAInvalidSignatureS",
     type: "error",
   },
+  { inputs: [], name: "InvalidShortString", type: "error" },
+  { inputs: [], name: "InvalidSignature", type: "error" },
+  { inputs: [], name: "NoAgents", type: "error" },
+  { inputs: [], name: "NoPayment", type: "error" },
+  { inputs: [], name: "SharesLengthMismatch", type: "error" },
+  { inputs: [], name: "SharesSumInvalid", type: "error" },
+  { inputs: [], name: "SplitAlreadySubmitted", type: "error" },
   {
-    inputs: [],
-    name: "NoPayment",
+    inputs: [{ internalType: "string", name: "str", type: "string" }],
+    name: "StringTooLong",
     type: "error",
   },
-  {
-    inputs: [],
-    name: "OnlyOracle",
-    type: "error",
-  },
-  {
-    inputs: [],
-    name: "SharesLengthMismatch",
-    type: "error",
-  },
-  {
-    inputs: [],
-    name: "SharesSumInvalid",
-    type: "error",
-  },
-  {
-    inputs: [],
-    name: "SplitAlreadySubmitted",
-    type: "error",
-  },
-  {
-    inputs: [],
-    name: "SplitNotSubmitted",
-    type: "error",
-  },
-  {
-    inputs: [],
-    name: "TaskAlreadyExists",
-    type: "error",
-  },
-  {
-    inputs: [],
-    name: "TaskNotFound",
-    type: "error",
-  },
-  {
-    inputs: [],
-    name: "TransferFailed",
-    type: "error",
-  },
+  { inputs: [], name: "TaskAlreadyExists", type: "error" },
+  { inputs: [], name: "TaskNotFound", type: "error" },
+  { inputs: [], name: "TransferFailed", type: "error" },
+  { anonymous: false, inputs: [], name: "EIP712DomainChanged", type: "event" },
   {
     anonymous: false,
     inputs: [
-      {
-        indexed: true,
-        internalType: "bytes32",
-        name: "taskId",
-        type: "bytes32",
-      },
-      {
-        indexed: false,
-        internalType: "address[]",
-        name: "agents",
-        type: "address[]",
-      },
-      {
-        indexed: false,
-        internalType: "uint256[]",
-        name: "payouts",
-        type: "uint256[]",
-      },
+      { indexed: true, internalType: "bytes32", name: "taskId", type: "bytes32" },
+      { indexed: false, internalType: "address[]", name: "agents", type: "address[]" },
+      { indexed: false, internalType: "uint256[]", name: "payouts", type: "uint256[]" },
     ],
     name: "Settled",
     type: "event",
@@ -93,18 +48,8 @@ export const SPLIT_VAULT_ABI = [
   {
     anonymous: false,
     inputs: [
-      {
-        indexed: true,
-        internalType: "bytes32",
-        name: "taskId",
-        type: "bytes32",
-      },
-      {
-        indexed: false,
-        internalType: "uint256[]",
-        name: "shares",
-        type: "uint256[]",
-      },
+      { indexed: true, internalType: "bytes32", name: "taskId", type: "bytes32" },
+      { indexed: false, internalType: "uint256[]", name: "shares", type: "uint256[]" },
     ],
     name: "SplitSubmitted",
     type: "event",
@@ -112,92 +57,64 @@ export const SPLIT_VAULT_ABI = [
   {
     anonymous: false,
     inputs: [
-      {
-        indexed: true,
-        internalType: "bytes32",
-        name: "taskId",
-        type: "bytes32",
-      },
-      {
-        indexed: true,
-        internalType: "address",
-        name: "payer",
-        type: "address",
-      },
-      {
-        indexed: false,
-        internalType: "address[]",
-        name: "agents",
-        type: "address[]",
-      },
-      {
-        indexed: false,
-        internalType: "uint256",
-        name: "totalAmount",
-        type: "uint256",
-      },
+      { indexed: true, internalType: "bytes32", name: "taskId", type: "bytes32" },
+      { indexed: true, internalType: "address", name: "payer", type: "address" },
+      { indexed: false, internalType: "address[]", name: "agents", type: "address[]" },
+      { indexed: false, internalType: "uint256", name: "totalAmount", type: "uint256" },
     ],
     name: "TaskCreated",
     type: "event",
   },
   {
-    inputs: [
-      {
-        internalType: "bytes32",
-        name: "taskId",
-        type: "bytes32",
-      },
-      {
-        internalType: "address[]",
-        name: "agents",
-        type: "address[]",
-      },
-    ],
-    name: "createTask",
-    outputs: [],
-    stateMutability: "payable",
+    inputs: [],
+    name: "SPLIT_TYPEHASH",
+    outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
+    stateMutability: "view",
     type: "function",
   },
   {
     inputs: [
-      {
-        internalType: "bytes32",
-        name: "taskId",
-        type: "bytes32",
-      },
+      { internalType: "bytes32", name: "taskId", type: "bytes32" },
+      { internalType: "address[]", name: "agents", type: "address[]" },
+      { internalType: "uint256", name: "amount", type: "uint256" },
     ],
+    name: "createTask",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "eip712Domain",
+    outputs: [
+      { internalType: "bytes1", name: "fields", type: "bytes1" },
+      { internalType: "string", name: "name", type: "string" },
+      { internalType: "string", name: "version", type: "string" },
+      { internalType: "uint256", name: "chainId", type: "uint256" },
+      { internalType: "address", name: "verifyingContract", type: "address" },
+      { internalType: "bytes32", name: "salt", type: "bytes32" },
+      { internalType: "uint256[]", name: "extensions", type: "uint256[]" },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "getDomainSeparator",
+    outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ internalType: "bytes32", name: "taskId", type: "bytes32" }],
     name: "getTask",
     outputs: [
-      {
-        internalType: "address",
-        name: "payer",
-        type: "address",
-      },
-      {
-        internalType: "address[]",
-        name: "agents",
-        type: "address[]",
-      },
-      {
-        internalType: "uint256",
-        name: "totalAmount",
-        type: "uint256",
-      },
-      {
-        internalType: "uint256[]",
-        name: "shares",
-        type: "uint256[]",
-      },
-      {
-        internalType: "bool",
-        name: "splitSubmitted",
-        type: "bool",
-      },
-      {
-        internalType: "bool",
-        name: "settled",
-        type: "bool",
-      },
+      { internalType: "address", name: "payer", type: "address" },
+      { internalType: "address[]", name: "agents", type: "address[]" },
+      { internalType: "uint256", name: "totalAmount", type: "uint256" },
+      { internalType: "uint256[]", name: "shares", type: "uint256[]" },
+      { internalType: "bool", name: "splitSubmitted", type: "bool" },
+      { internalType: "bool", name: "settled", type: "bool" },
     ],
     stateMutability: "view",
     type: "function",
@@ -205,43 +122,17 @@ export const SPLIT_VAULT_ABI = [
   {
     inputs: [],
     name: "oracle",
-    outputs: [
-      {
-        internalType: "address",
-        name: "",
-        type: "address",
-      },
-    ],
+    outputs: [{ internalType: "address", name: "", type: "address" }],
     stateMutability: "view",
     type: "function",
   },
   {
     inputs: [
-      {
-        internalType: "bytes32",
-        name: "taskId",
-        type: "bytes32",
-      },
+      { internalType: "bytes32", name: "taskId", type: "bytes32" },
+      { internalType: "uint256[]", name: "shares", type: "uint256[]" },
+      { internalType: "bytes", name: "signature", type: "bytes" },
     ],
-    name: "settle",
-    outputs: [],
-    stateMutability: "nonpayable",
-    type: "function",
-  },
-  {
-    inputs: [
-      {
-        internalType: "bytes32",
-        name: "taskId",
-        type: "bytes32",
-      },
-      {
-        internalType: "uint256[]",
-        name: "shares",
-        type: "uint256[]",
-      },
-    ],
-    name: "submitSplit",
+    name: "submitSplitAndSettle",
     outputs: [],
     stateMutability: "nonpayable",
     type: "function",
@@ -249,71 +140,72 @@ export const SPLIT_VAULT_ABI = [
   {
     inputs: [],
     name: "taskCount",
-    outputs: [
-      {
-        internalType: "uint256",
-        name: "",
-        type: "uint256",
-      },
-    ],
+    outputs: [{ internalType: "uint256", name: "", type: "uint256" }],
     stateMutability: "view",
     type: "function",
   },
   {
-    inputs: [
-      {
-        internalType: "uint256",
-        name: "",
-        type: "uint256",
-      },
-    ],
+    inputs: [{ internalType: "uint256", name: "", type: "uint256" }],
     name: "taskIds",
-    outputs: [
-      {
-        internalType: "bytes32",
-        name: "",
-        type: "bytes32",
-      },
-    ],
+    outputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
     stateMutability: "view",
     type: "function",
   },
   {
-    inputs: [
-      {
-        internalType: "bytes32",
-        name: "",
-        type: "bytes32",
-      },
-    ],
+    inputs: [{ internalType: "bytes32", name: "", type: "bytes32" }],
     name: "tasks",
     outputs: [
-      {
-        internalType: "bytes32",
-        name: "taskId",
-        type: "bytes32",
-      },
-      {
-        internalType: "address",
-        name: "payer",
-        type: "address",
-      },
-      {
-        internalType: "uint256",
-        name: "totalAmount",
-        type: "uint256",
-      },
-      {
-        internalType: "bool",
-        name: "splitSubmitted",
-        type: "bool",
-      },
-      {
-        internalType: "bool",
-        name: "settled",
-        type: "bool",
-      },
+      { internalType: "bytes32", name: "taskId", type: "bytes32" },
+      { internalType: "address", name: "payer", type: "address" },
+      { internalType: "uint256", name: "totalAmount", type: "uint256" },
+      { internalType: "bool", name: "splitSubmitted", type: "bool" },
+      { internalType: "bool", name: "settled", type: "bool" },
     ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "usdc",
+    outputs: [{ internalType: "contract IERC20", name: "", type: "address" }],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const;
+
+// Minimal ERC20 ABI for approve/allowance/balanceOf
+export const ERC20_ABI = [
+  {
+    inputs: [
+      { name: "spender", type: "address" },
+      { name: "amount", type: "uint256" },
+    ],
+    name: "approve",
+    outputs: [{ name: "", type: "bool" }],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    name: "allowance",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [{ name: "account", type: "address" }],
+    name: "balanceOf",
+    outputs: [{ name: "", type: "uint256" }],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "decimals",
+    outputs: [{ name: "", type: "uint8" }],
     stateMutability: "view",
     type: "function",
   },
