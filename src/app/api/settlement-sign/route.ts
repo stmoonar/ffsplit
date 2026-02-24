@@ -16,10 +16,19 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const body = await request.json();
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      { error: "Invalid JSON body" },
+      { status: 400 }
+    );
+  }
+
   const { task_id, agents } = body as {
     task_id?: string;
-    agents?: { agent: string; share_percent: number }[];
+    agents?: { agent: string; share_percent: number; share_raw?: number }[];
   };
 
   if (!task_id || !Array.isArray(agents) || agents.length === 0) {
@@ -34,10 +43,11 @@ export async function POST(request: NextRequest) {
       ? task_id
       : ethers.id(task_id);
 
-    const shapleyAddressMap = new Map<string, number>();
+    // Build address → raw share mapping (prefer share_raw, fall back to share_percent)
+    const shapleyRawMap = new Map<string, number>();
     for (const agent of agents) {
       const address = getAgentAddress(agent.agent).toLowerCase();
-      shapleyAddressMap.set(address, Math.round(agent.share_percent * 100));
+      shapleyRawMap.set(address, agent.share_raw ?? agent.share_percent);
     }
 
     const addresses = await getTaskAgentAddresses(taskIdBytes32);
@@ -45,17 +55,28 @@ export async function POST(request: NextRequest) {
       throw new Error("On-chain task has no agents");
     }
 
-    const sharesBasisPoints = addresses.map(
-      (address) => shapleyAddressMap.get(address.toLowerCase()) ?? 0
+    // Normalize first to avoid overflow/underflow and index-out-of-range in remainder loop.
+    const matchedShares = addresses.map(
+      (address) => shapleyRawMap.get(address.toLowerCase()) ?? 0
     );
+    const totalMatchedShare = matchedShares.reduce((sum, share) => sum + share, 0);
+    if (totalMatchedShare <= 0) {
+      throw new Error("No matching Shapley shares for on-chain agents");
+    }
 
-    const bpSum = sharesBasisPoints.reduce((sum, value) => sum + value, 0);
-    if (bpSum !== 10000) {
-      const synthIndex = addresses.findIndex(
-        (address) => address.toLowerCase() === getAgentAddress("synthesizer").toLowerCase()
-      );
-      const targetIndex = synthIndex >= 0 ? synthIndex : 0;
-      sharesBasisPoints[targetIndex] += 10000 - bpSum;
+    // Largest-remainder method for fair bp allocation
+    const rawBasisPoints = matchedShares.map((share) => (share / totalMatchedShare) * 10000);
+    const floored = rawBasisPoints.map((s) => Math.floor(s));
+    let remainder = 10000 - floored.reduce((s, v) => s + v, 0);
+    const remainders = rawBasisPoints.map((s, i) => ({
+      index: i,
+      remainder: s - floored[i],
+    }));
+    remainders.sort((a, b) => b.remainder - a.remainder);
+    const sharesBasisPoints = [...floored];
+
+    for (let i = 0; i < remainder; i++) {
+      sharesBasisPoints[remainders[i % remainders.length].index] += 1;
     }
 
     const signedData = await signSplitData(taskIdBytes32, addresses, sharesBasisPoints);
@@ -75,6 +96,11 @@ export async function POST(request: NextRequest) {
       explorerBaseUrl,
     });
   } catch (error) {
+    console.error("[settlement-sign] failed:", {
+      task_id,
+      agents_count: agents?.length ?? 0,
+      error,
+    });
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Failed to regenerate settlement signature" },
       { status: 500 }

@@ -25,6 +25,7 @@ import { RiSettings3Line, RiHistoryLine, RiWallet3Line } from "@remixicon/react"
 const PROFILES_STORAGE_KEY = "fairsplit_model_profiles";
 const DEFAULT_PROFILE_STORAGE_KEY = "fairsplit_default_profile_id";
 const AGENT_ASSIGNMENTS_STORAGE_KEY = "fairsplit_agent_assignments";
+const MAX_WORKERS_STORAGE_KEY = "fairsplit_max_workers";
 
 type AppPhase = "input" | "approving" | "locking" | "running" | "result";
 
@@ -44,6 +45,7 @@ export default function Home() {
   const [settlementResult, setSettlementResult] = useState<SettlementResult | null>(null);
   const [settlementPending, setSettlementPending] = useState(false);
   const [settlementSignature, setSettlementSignature] = useState<SettlementSignatureData | null>(null);
+  const [settlementOnChain, setSettlementOnChain] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   // Wallet state
@@ -54,6 +56,7 @@ export default function Home() {
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
   const [agentAssignments, setAgentAssignments] = useState<Record<string, string>>({});
+  const [maxWorkers, setMaxWorkers] = useState(5);
 
   // Load config from localStorage on mount
   useEffect(() => {
@@ -69,7 +72,47 @@ export default function Home() {
       const stored = localStorage.getItem(AGENT_ASSIGNMENTS_STORAGE_KEY);
       if (stored) setAgentAssignments(JSON.parse(stored));
     } catch { /* ignore */ }
+    try {
+      const stored = localStorage.getItem(MAX_WORKERS_STORAGE_KEY);
+      if (stored) setMaxWorkers(JSON.parse(stored));
+    } catch { /* ignore */ }
   }, []);
+
+  // Sync settlement status from chain so UI reflects already-settled tasks after refresh/reload.
+  useEffect(() => {
+    let cancelled = false;
+
+    const checkSettlementStatus = async () => {
+      if (!shapleyResult || !/^0x[a-fA-F0-9]{64}$/.test(shapleyResult.task_id)) {
+        if (!cancelled) setSettlementOnChain(false);
+        return;
+      }
+      if (settlementResult) {
+        if (!cancelled) setSettlementOnChain(true);
+        return;
+      }
+      if (typeof window === "undefined" || !window.ethereum) return;
+
+      const vaultAddress =
+        settlementSignature?.vault_address || process.env.NEXT_PUBLIC_VAULT_ADDRESS;
+      if (!vaultAddress) return;
+
+      try {
+        const provider = new ethers.BrowserProvider(window.ethereum);
+        const vault = new ethers.Contract(vaultAddress, SPLIT_VAULT_ABI, provider);
+        const task = await vault.getTask(shapleyResult.task_id);
+        const isSettled = Boolean(task[4]) || Boolean(task[5]);
+        if (!cancelled) setSettlementOnChain(isSettled);
+      } catch (error) {
+        console.warn("Failed to sync on-chain settlement status:", error);
+      }
+    };
+
+    void checkSettlementStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [shapleyResult, settlementResult, settlementSignature, walletChainId]);
 
   // Connect wallet
   const connectWallet = useCallback(async () => {
@@ -106,10 +149,11 @@ export default function Home() {
   }, []);
 
   const handleSaveConfig = useCallback(
-    (newProfiles: ModelProfile[], newDefaultId: string | null, newAssignments: Record<string, string>) => {
+    (newProfiles: ModelProfile[], newDefaultId: string | null, newAssignments: Record<string, string>, newMaxWorkers: number) => {
       setProfiles(newProfiles);
       setDefaultProfileId(newDefaultId);
       setAgentAssignments(newAssignments);
+      setMaxWorkers(newMaxWorkers);
 
       if (newProfiles.length > 0) {
         localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(newProfiles));
@@ -128,6 +172,8 @@ export default function Home() {
       } else {
         localStorage.removeItem(AGENT_ASSIGNMENTS_STORAGE_KEY);
       }
+
+      localStorage.setItem(MAX_WORKERS_STORAGE_KEY, JSON.stringify(newMaxWorkers));
     },
     []
   );
@@ -150,6 +196,7 @@ export default function Home() {
           model_profiles: profiles,
           default_profile_id: defaultProfileId,
           agent_assignments: agentAssignments,
+          max_workers: maxWorkers,
           ...extraBody,
         }),
         signal: controller.signal,
@@ -271,7 +318,7 @@ export default function Home() {
 
       return { type: "stream_complete" as const };
     },
-    [profiles, defaultProfileId, agentAssignments]
+    [profiles, defaultProfileId, agentAssignments, maxWorkers]
   );
 
   const handleSubmit = useCallback(
@@ -288,6 +335,7 @@ export default function Home() {
       setErrorMessage(null);
       setSettlementResult(null);
       setSettlementSignature(null);
+      setSettlementOnChain(false);
       setSettlementPending(false);
 
       abortRef.current?.abort();
@@ -302,10 +350,33 @@ export default function Home() {
           const paymentInfo = result.paymentInfo;
           const requiredChainId = Number(paymentInfo.chain_id);
 
-          // Step 2: Compute taskId (cryptographically bound)
-          const nonce = Date.now();
+          // Step 2a: Decompose task first to get dynamic agent list
+          const decomposeResp = await fetch("/api/task", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query,
+              decompose_only: true,
+              model_profiles: profiles,
+              default_profile_id: defaultProfileId,
+              agent_assignments: agentAssignments,
+              max_workers: maxWorkers,
+            }),
+            signal: controller.signal,
+          });
+          if (!decomposeResp.ok) {
+            const errText = await decomposeResp.text().catch(() => "");
+            throw new Error(errText || "Task decomposition failed");
+          }
+          const decomposeData = await decomposeResp.json();
+          const dynamicAgentAddresses: string[] = decomposeData.agent_addresses;
+
+          // Step 2b: Compute taskId with high-entropy nonce (cryptographically bound)
+          const nonceBytes = new Uint8Array(32);
+          crypto.getRandomValues(nonceBytes);
+          const nonce = ethers.hexlify(nonceBytes);
           const taskIdBytes32 = ethers.solidityPackedKeccak256(
-            ["string", "address", "uint256"],
+            ["string", "address", "bytes32"],
             [query, walletAddress, nonce]
           );
 
@@ -396,19 +467,11 @@ export default function Home() {
             await approveTx.wait();
           }
 
-          // Step 4: Create task on-chain (lock USDC)
+          // Step 4: Create task on-chain with dynamic agent list
           setPhase("locking");
           const vaultContract = new ethers.Contract(paymentInfo.vault_address, SPLIT_VAULT_ABI, signer);
 
-          // Get deterministic agent addresses (same derivation as trace.ts)
-          const { getAgentAddress } = await import("@/lib/trace");
-          const agentAddresses = [
-            getAgentAddress("worker_1"),
-            getAgentAddress("worker_2"),
-            getAgentAddress("synthesizer"),
-          ];
-
-          const createTx = await vaultContract.createTask(taskIdBytes32, agentAddresses, amountRaw);
+          const createTx = await vaultContract.createTask(taskIdBytes32, dynamicAgentAddresses, amountRaw);
           const receipt = await createTx.wait();
 
           // Step 5: Re-request with payment proof
@@ -451,6 +514,14 @@ export default function Home() {
         signer
       );
 
+      // Preflight: avoid submitting a second settlement for an already-settled task.
+      const task = await vault.getTask(settlementSignature.taskId);
+      const splitSubmitted = Boolean(task[4]);
+      const settled = Boolean(task[5]);
+      if (splitSubmitted || settled) {
+        throw new Error("This task has already been settled on-chain. No need to submit again.");
+      }
+
       const shares = settlementSignature.shares.map((s) => BigInt(s));
       const tx = await vault.submitSplitAndSettle(
         settlementSignature.taskId,
@@ -463,11 +534,16 @@ export default function Home() {
         settleTxHash: receipt.hash,
         explorerBaseUrl: settlementSignature.explorerBaseUrl,
       });
+      setSettlementOnChain(true);
     } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "Unknown error";
+      if (errorMessage.includes("0x4bee0194") || errorMessage.includes("SplitAlreadySubmitted")) {
+        setErrorMessage("This task has already been settled on-chain. Re-submission is rejected by contract.");
+        setSettlementOnChain(true);
+      } else {
+        setErrorMessage(`Settlement failed: ${errorMessage}`);
+      }
       console.error("Settlement failed:", error);
-      setErrorMessage(
-        `Settlement failed: ${error instanceof Error ? error.message : "Unknown error"}`
-      );
     } finally {
       setSettlementPending(false);
     }
@@ -492,13 +568,32 @@ export default function Home() {
           agents: shapleyResult.agents.map((agent) => ({
             agent: agent.agent,
             share_percent: agent.share_percent,
+            share_raw: agent.share_raw,
           })),
         }),
       });
 
-      const data = await response.json();
+      const responseText = await response.text();
+      let data: unknown = null;
+      try {
+        data = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        data = null;
+      }
+
       if (!response.ok) {
-        throw new Error(data?.error || `Failed to regenerate signature (${response.status})`);
+        const errorMessage =
+          typeof data === "object" &&
+          data !== null &&
+          "error" in data &&
+          typeof (data as { error: unknown }).error === "string"
+            ? (data as { error: string }).error
+            : responseText || `Failed to regenerate signature (${response.status})`;
+        throw new Error(errorMessage);
+      }
+
+      if (!data || typeof data !== "object") {
+        throw new Error("Invalid settlement-sign response payload");
       }
 
       setSettlementSignature(data as SettlementSignatureData);
@@ -524,6 +619,7 @@ export default function Home() {
     setShapleyResult(record.shapleyResult);
     setSettlementSignature(record.settlementSignature || null);
     setSettlementResult(record.settlementResult);
+    setSettlementOnChain(!!record.settlementResult);
     setSettlementPending(false);
     setErrorMessage(null);
     setPhase("result");
@@ -542,6 +638,7 @@ export default function Home() {
     setErrorMessage(null);
     setSettlementResult(null);
     setSettlementSignature(null);
+    setSettlementOnChain(false);
     setSettlementPending(false);
   }, []);
 
@@ -695,6 +792,7 @@ export default function Home() {
               paymentUsdc={paymentUsdc}
               traces={traces}
               settlement={settlementResult}
+              settlementOnChain={settlementOnChain}
               settlementPending={settlementPending}
               settlementSignature={settlementSignature}
               onSettle={handleSettle}
@@ -726,6 +824,7 @@ export default function Home() {
         profiles={profiles}
         defaultProfileId={defaultProfileId}
         agentAssignments={agentAssignments}
+        maxWorkers={maxWorkers}
         onSave={handleSaveConfig}
       />
     </main>

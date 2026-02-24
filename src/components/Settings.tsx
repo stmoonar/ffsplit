@@ -16,10 +16,12 @@ interface SettingsProps {
   profiles: ModelProfile[];
   defaultProfileId: string | null;
   agentAssignments: Record<string, string>;
+  maxWorkers: number;
   onSave: (
     profiles: ModelProfile[],
     defaultProfileId: string | null,
-    agentAssignments: Record<string, string>
+    agentAssignments: Record<string, string>,
+    maxWorkers: number
   ) => void;
 }
 
@@ -351,11 +353,13 @@ export default function Settings({
   profiles: savedProfiles,
   defaultProfileId: savedDefaultId,
   agentAssignments: savedAssignments,
+  maxWorkers: savedMaxWorkers,
   onSave,
 }: SettingsProps) {
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
   const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
   const [agentAssignments, setAgentAssignments] = useState<Record<string, string>>({});
+  const [maxWorkers, setMaxWorkers] = useState(5);
   const [closing, setClosing] = useState(false);
   const [activeSection, setActiveSection] = useState<"profiles" | "assignments">("profiles");
 
@@ -365,10 +369,11 @@ export default function Settings({
       setProfiles(savedProfiles.length > 0 ? [...savedProfiles] : []);
       setDefaultProfileId(savedDefaultId);
       setAgentAssignments({ ...savedAssignments });
+      setMaxWorkers(savedMaxWorkers);
       setClosing(false);
       setActiveSection("profiles");
     }
-  }, [isOpen, savedProfiles, savedDefaultId, savedAssignments]);
+  }, [isOpen, savedProfiles, savedDefaultId, savedAssignments, savedMaxWorkers]);
 
   const handleClose = useCallback(() => {
     setClosing(true);
@@ -388,9 +393,9 @@ export default function Settings({
     // Ensure defaultProfileId is valid
     const validDefault = defaultProfileId && profileIds.has(defaultProfileId) ? defaultProfileId : (profiles[0]?.id || null);
 
-    onSave(profiles, validDefault, cleanAssignments);
+    onSave(profiles, validDefault, cleanAssignments, maxWorkers);
     handleClose();
-  }, [profiles, defaultProfileId, agentAssignments, onSave, handleClose]);
+  }, [profiles, defaultProfileId, agentAssignments, maxWorkers, onSave, handleClose]);
 
   const handleAddProfile = useCallback(() => {
     const newProfile: ModelProfile = {
@@ -427,7 +432,7 @@ export default function Settings({
   }, [defaultProfileId]);
 
   const handleClear = useCallback(() => {
-    onSave([], null, {});
+    onSave([], null, {}, 5);
     handleClose();
   }, [onSave, handleClose]);
 
@@ -563,14 +568,33 @@ export default function Settings({
                       </p>
                     </div>
 
+                    {/* Max Workers */}
+                    <div className="rounded-lg border border-border bg-card p-4">
+                      <label className="small-caps mb-2 block text-accent">Max Workers</label>
+                      <p className="mb-3 text-[11px] text-muted-foreground/60">
+                        Upper limit on the number of worker agents the LLM can create per task (2–8)
+                      </p>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min={2}
+                          max={8}
+                          value={maxWorkers}
+                          onChange={(e) => setMaxWorkers(Number(e.target.value))}
+                          className="flex-1 accent-accent"
+                        />
+                        <span className="w-6 text-center text-sm font-semibold text-foreground tabular-nums">{maxWorkers}</span>
+                      </div>
+                    </div>
+
                     {/* Per-agent assignments */}
                     <div className="rounded-lg border border-border bg-card p-4">
                       <label className="small-caps mb-3 block text-accent">Per-Agent Overrides</label>
                       <p className="mb-3 text-[11px] text-muted-foreground/60">
-                        Agent IDs are determined dynamically when a task runs. You can pre-configure common roles:
+                        Assign specific models to each worker slot and synthesizer.
                       </p>
                       <div className="space-y-2">
-                        {["worker_1", "worker_2", "worker_3", "synthesizer"].map((agentId) => (
+                        {[...Array.from({ length: maxWorkers }, (_, i) => `worker_${i + 1}`), "synthesizer"].map((agentId) => (
                           <div key={agentId} className="flex items-center gap-3">
                             <span className="w-20 text-xs font-medium text-foreground truncate">
                               {agentId.replace("_", " ")}

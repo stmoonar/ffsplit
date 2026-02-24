@@ -20,6 +20,7 @@ contract SplitVault is EIP712 {
         uint256[] shares; // basis points (1/10000)
         bool splitSubmitted;
         bool settled;
+        uint256 deadline; // timestamp after which payer can refund
     }
 
     // --- Constants ---
@@ -32,6 +33,7 @@ contract SplitVault is EIP712 {
 
     IERC20 public usdc;
     address public oracle; // Oracle public key for signature verification (not a privileged caller)
+    uint256 public constant REFUND_TIMEOUT = 1 hours;
     mapping(bytes32 => Task) public tasks;
     bytes32[] public taskIds;
 
@@ -55,6 +57,12 @@ contract SplitVault is EIP712 {
         uint256[] payouts
     );
 
+    event Refunded(
+        bytes32 indexed taskId,
+        address indexed payer,
+        uint256 amount
+    );
+
     // --- Errors ---
 
     error TaskAlreadyExists();
@@ -67,6 +75,8 @@ contract SplitVault is EIP712 {
     error NoAgents();
     error NoPayment();
     error InvalidSignature();
+    error DeadlineNotReached();
+    error NotPayer();
 
     // --- Constructor ---
 
@@ -107,7 +117,8 @@ contract SplitVault is EIP712 {
             totalAmount: actualAmount,
             shares: new uint256[](0),
             splitSubmitted: false,
-            settled: false
+            settled: false,
+            deadline: block.timestamp + REFUND_TIMEOUT
         });
         taskIds.push(taskId);
 
@@ -172,6 +183,26 @@ contract SplitVault is EIP712 {
         emit Settled(taskId, task.agents, payouts);
     }
 
+    /// @notice Refund locked USDC to the payer if the deadline has passed and task is unsettled
+    /// @param taskId Task to refund
+    function refund(bytes32 taskId) external {
+        Task storage task = tasks[taskId];
+        if (task.totalAmount == 0) revert TaskNotFound();
+        if (task.settled) revert AlreadySettled();
+        if (task.splitSubmitted) revert SplitAlreadySubmitted();
+        if (msg.sender != task.payer) revert NotPayer();
+        if (block.timestamp < task.deadline) revert DeadlineNotReached();
+
+        uint256 amount = task.totalAmount;
+        task.settled = true;
+        task.totalAmount = 0;
+
+        bool success = usdc.transfer(task.payer, amount);
+        if (!success) revert TransferFailed();
+
+        emit Refunded(taskId, task.payer, amount);
+    }
+
     // --- View Functions ---
 
     /// @notice Get task details
@@ -184,7 +215,8 @@ contract SplitVault is EIP712 {
             uint256 totalAmount,
             uint256[] memory shares,
             bool splitSubmitted,
-            bool settled
+            bool settled,
+            uint256 deadline
         )
     {
         Task storage task = tasks[taskId];
@@ -194,7 +226,8 @@ contract SplitVault is EIP712 {
             task.totalAmount,
             task.shares,
             task.splitSubmitted,
-            task.settled
+            task.settled,
+            task.deadline
         );
     }
 

@@ -31,9 +31,6 @@ function getVaultContract(signerOrProvider?: ethers.Signer | ethers.Provider) {
   );
 }
 
-// Consumed task IDs — prevents replay/double-spend attacks
-const consumedTaskIds = new Set<string>();
-
 const SPLIT_TYPES = {
   Split: [
     { name: "taskId", type: "bytes32" },
@@ -89,12 +86,20 @@ export async function verifyCreateTaskTx(
   expectedAmount: bigint,
   signerAddress: string
 ): Promise<{ valid: boolean; error?: string }> {
-  // Check consumed (anti-double-spend)
-  if (consumedTaskIds.has(expectedTaskId)) {
-    return { valid: false, error: "Task ID already consumed" };
-  }
-
   try {
+    // Anti-replay: check on-chain task state (survives restarts and multi-instance)
+    const vault = getVaultContract();
+    const task = await vault.getTask(expectedTaskId);
+    const onChainAmount = task[2] as bigint;
+    const splitSubmitted = task[4] as boolean;
+
+    if (onChainAmount === 0n) {
+      return { valid: false, error: "Task not found on-chain" };
+    }
+    if (splitSubmitted) {
+      return { valid: false, error: "Task already settled (replay rejected)" };
+    }
+
     const provider = getProvider();
     const receipt = await provider.getTransactionReceipt(txHash);
 
@@ -112,8 +117,8 @@ export async function verifyCreateTaskTx(
     }
 
     // Parse TaskCreated event from logs
-    const vault = getVaultContract();
-    const taskCreatedTopic = vault.interface.getEvent("TaskCreated")!.topicHash;
+    const vaultForParsing = getVaultContract();
+    const taskCreatedTopic = vaultForParsing.interface.getEvent("TaskCreated")!.topicHash;
 
     const taskCreatedLog = receipt.logs.find(
       (log) => log.topics[0] === taskCreatedTopic
@@ -123,7 +128,7 @@ export async function verifyCreateTaskTx(
       return { valid: false, error: "No TaskCreated event found in transaction" };
     }
 
-    const parsed = vault.interface.parseLog({
+    const parsed = vaultForParsing.interface.parseLog({
       topics: [...taskCreatedLog.topics],
       data: taskCreatedLog.data,
     });
@@ -146,9 +151,6 @@ export async function verifyCreateTaskTx(
     if (parsed.args.totalAmount < expectedAmount) {
       return { valid: false, error: "Insufficient payment amount" };
     }
-
-    // Mark as consumed
-    consumedTaskIds.add(expectedTaskId);
 
     return { valid: true };
   } catch (error) {

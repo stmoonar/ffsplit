@@ -42,7 +42,81 @@ export async function POST(request: NextRequest) {
     agent_llm_configs,
     task_id: clientTaskId,
     sender_address: senderAddress,
+    decompose_only,
+    max_workers,
   } = body;
+
+  const maxWorkers = typeof max_workers === "number" && max_workers >= 2 && max_workers <= 8 ? max_workers : 5;
+
+  // --- Build LLM config resolver (shared by decompose-only and full flow) ---
+  const profileMap = new Map<string, ModelProfile>();
+  if (Array.isArray(model_profiles)) {
+    for (const p of model_profiles) {
+      profileMap.set(p.id, p);
+    }
+  }
+
+  const isUsableConfig = (cfg?: LLMConfig): cfg is LLMConfig => {
+    if (!cfg) return false;
+    if (cfg.provider === "ollama") return true;
+    return !!cfg.apiKey?.trim();
+  };
+
+  const profileToConfig = (profile: ModelProfile): LLMConfig => ({
+    provider: profile.provider,
+    apiKey: profile.apiKey,
+    model: profile.model,
+    baseUrl: profile.baseUrl,
+  });
+
+  const resolveConfig = (agentId: string): LLMConfig | undefined => {
+    if (agent_assignments?.[agentId]) {
+      const profile = profileMap.get(agent_assignments[agentId]);
+      if (profile) {
+        const cfg = profileToConfig(profile);
+        if (isUsableConfig(cfg)) return cfg;
+      }
+    }
+
+    if (agent_llm_configs?.[agentId] && isUsableConfig(agent_llm_configs[agentId])) {
+      return agent_llm_configs[agentId];
+    }
+
+    if (default_profile_id) {
+      const profile = profileMap.get(default_profile_id);
+      if (profile) {
+        const cfg = profileToConfig(profile);
+        if (isUsableConfig(cfg)) return cfg;
+      }
+    }
+
+    if (isUsableConfig(llm_config)) return llm_config;
+
+    if (process.env.KIMI_API_KEY) {
+      return { provider: "kimi" as const, apiKey: process.env.KIMI_API_KEY };
+    }
+
+    return undefined;
+  };
+
+  // --- Phase 0a: Decompose-only mode (returns agent list for on-chain registration) ---
+  if (decompose_only) {
+    try {
+      const decomposition = await decomposeTask(query, resolveConfig("decomposer"), maxWorkers);
+      const agentIds = [...decomposition.subtasks.map((s) => s.id), "synthesizer"];
+      const agentAddresses = agentIds.map((id) => getAgentAddress(id));
+      return NextResponse.json({
+        decomposition,
+        agent_ids: agentIds,
+        agent_addresses: agentAddresses,
+      });
+    } catch (error) {
+      return NextResponse.json(
+        { error: error instanceof Error ? error.message : "Decomposition failed" },
+        { status: 500 }
+      );
+    }
+  }
 
   // --- x402 Payment Protocol ---
   const authHeader = request.headers.get("authorization");
@@ -122,56 +196,6 @@ export async function POST(request: NextRequest) {
   // Use client-provided taskId (bound to payment) or generate one
   const taskId = clientTaskId || `task-${Date.now().toString(36)}`;
 
-  const profileMap = new Map<string, ModelProfile>();
-  if (Array.isArray(model_profiles)) {
-    for (const p of model_profiles) {
-      profileMap.set(p.id, p);
-    }
-  }
-
-  const isUsableConfig = (cfg?: LLMConfig): cfg is LLMConfig => {
-    if (!cfg) return false;
-    if (cfg.provider === "ollama") return true;
-    return !!cfg.apiKey?.trim();
-  };
-
-  const profileToConfig = (profile: ModelProfile): LLMConfig => ({
-    provider: profile.provider,
-    apiKey: profile.apiKey,
-    model: profile.model,
-    baseUrl: profile.baseUrl,
-  });
-
-  const resolveConfig = (agentId: string): LLMConfig | undefined => {
-    if (agent_assignments?.[agentId]) {
-      const profile = profileMap.get(agent_assignments[agentId]);
-      if (profile) {
-        const cfg = profileToConfig(profile);
-        if (isUsableConfig(cfg)) return cfg;
-      }
-    }
-
-    if (agent_llm_configs?.[agentId] && isUsableConfig(agent_llm_configs[agentId])) {
-      return agent_llm_configs[agentId];
-    }
-
-    if (default_profile_id) {
-      const profile = profileMap.get(default_profile_id);
-      if (profile) {
-        const cfg = profileToConfig(profile);
-        if (isUsableConfig(cfg)) return cfg;
-      }
-    }
-
-    if (isUsableConfig(llm_config)) return llm_config;
-
-    if (process.env.KIMI_API_KEY) {
-      return { provider: "kimi" as const, apiKey: process.env.KIMI_API_KEY };
-    }
-
-    return undefined;
-  };
-
   const stream = new ReadableStream({
     async start(controller) {
       const encoder = new TextEncoder();
@@ -187,7 +211,7 @@ export async function POST(request: NextRequest) {
           send({ type: "payment_verified", tx_hash: x402Auth.tx });
         }
 
-        const decomposition = await decomposeTask(query, resolveConfig("decomposer"));
+        const decomposition = await decomposeTask(query, resolveConfig("decomposer"), maxWorkers);
         send({ type: "task_decomposed", decomposition });
 
         const workerIds = decomposition.subtasks.map((s) => s.id);
@@ -270,10 +294,11 @@ export async function POST(request: NextRequest) {
               ? taskId
               : ethers.id(taskId);
 
-            const shapleyAddressMap = new Map<string, number>();
+            // Build address → raw share mapping (unrounded values)
+            const shapleyRawMap = new Map<string, number>();
             for (const agent of shapleyResult.agents) {
               const address = getAgentAddress(agent.agent).toLowerCase();
-              shapleyAddressMap.set(address, Math.round(agent.share_percent * 100));
+              shapleyRawMap.set(address, agent.share_raw);
             }
 
             const agents = await getTaskAgentAddresses(taskIdBytes32);
@@ -281,17 +306,26 @@ export async function POST(request: NextRequest) {
               throw new Error("On-chain task has no agents");
             }
 
-            const sharesBasisPoints = agents.map(
-              (address) => shapleyAddressMap.get(address.toLowerCase()) ?? 0
+            const matchedShares = agents.map(
+              (address) => shapleyRawMap.get(address.toLowerCase()) ?? 0
             );
-
-            const bpSum = sharesBasisPoints.reduce((s, v) => s + v, 0);
-            if (bpSum !== 10000) {
-              const synthIndex = agents.findIndex(
-                (address) => address.toLowerCase() === getAgentAddress("synthesizer").toLowerCase()
-              );
-              const targetIndex = synthIndex >= 0 ? synthIndex : 0;
-              sharesBasisPoints[targetIndex] += 10000 - bpSum;
+            const totalMatchedShare = matchedShares.reduce((sum, share) => sum + share, 0);
+            if (totalMatchedShare <= 0) {
+              throw new Error("No matching Shapley shares for on-chain agents");
+            }
+            const rawBasisPoints = matchedShares.map(
+              (share) => (share / totalMatchedShare) * 10000
+            );
+            const floored = rawBasisPoints.map((s) => Math.floor(s));
+            let remainder = 10000 - floored.reduce((s, v) => s + v, 0);
+            const remainders = rawBasisPoints.map((s, i) => ({
+              index: i,
+              remainder: s - floored[i],
+            }));
+            remainders.sort((a, b) => b.remainder - a.remainder);
+            const sharesBasisPoints = [...floored];
+            for (let i = 0; i < remainder; i++) {
+              sharesBasisPoints[remainders[i % remainders.length].index] += 1;
             }
 
             // Sign the split data instead of submitting directly

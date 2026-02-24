@@ -111,6 +111,7 @@ export interface AgentShapleyValue {
   agent_address: string;
   shapley_value: number;
   share_percent: number;
+  share_raw: number; // unrounded share percentage for precise bp conversion
   payout_usdc: number;
 }
 

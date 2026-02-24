@@ -1,7 +1,8 @@
 import { TaskDecomposition, LLMConfig } from "../types";
 import { chatCompletion } from "../llm";
 
-const SYSTEM_PROMPT = `You are a task decomposition agent. Given a user's task, break it into independent research subtasks. Decide the optimal number of subtasks (2 to 5) based on task complexity.
+function buildSystemPrompt(maxWorkers: number): string {
+  return `You are a task decomposition agent. Given a user's task, break it into independent research subtasks. Decide the optimal number of subtasks (2 to ${maxWorkers}) based on what the task actually needs.
 
 Respond in valid JSON only, no markdown, no explanation:
 {
@@ -13,15 +14,17 @@ Respond in valid JSON only, no markdown, no explanation:
 }
 
 Rules:
-- Use 2 subtasks for simple questions, 3-4 for moderate complexity, 5 for very complex multi-faceted tasks
+- You may use between 2 and ${maxWorkers} subtasks — choose freely based on the task's actual structure
 - Each subtask id must be "worker_1", "worker_2", "worker_3", etc.
 - Each subtask should cover a different aspect and be independently executable
 - The synthesis_prompt should explain how to combine all results
 - Use the same language as the user's input`;
+}
 
 export async function decomposeTask(
   query: string,
-  llmConfig?: LLMConfig
+  llmConfig?: LLMConfig,
+  maxWorkers: number = 5
 ): Promise<TaskDecomposition> {
   const hasUsableLlm =
     !!llmConfig &&
@@ -31,7 +34,7 @@ export async function decomposeTask(
     const result = await chatCompletion(
       llmConfig,
       [
-        { role: "system", content: SYSTEM_PROMPT },
+        { role: "system", content: buildSystemPrompt(maxWorkers) },
         { role: "user", content: query },
       ],
       { temperature: 0.3 }

@@ -13,6 +13,7 @@ interface SplitResultProps {
   paymentUsdc: number;
   traces: ContributionTrace[];
   settlement?: SettlementResult | null;
+  settlementOnChain?: boolean;
   settlementPending?: boolean;
   settlementSignature?: SettlementSignatureData | null;
   onSettle?: () => void;
@@ -72,6 +73,7 @@ export default function SplitResult({
   paymentUsdc,
   traces,
   settlement,
+  settlementOnChain,
   settlementPending,
   settlementSignature,
   onSettle,
@@ -389,7 +391,7 @@ export default function SplitResult({
         )}
 
         {/* Settlement signature ready — show Settle button */}
-        {settlementSignature && !settlement && !settlementPending && (
+        {settlementSignature && !settlement && !settlementOnChain && !settlementPending && (
           <div className="space-y-4">
             <div className="rounded-md bg-muted/30 px-4 py-3">
               <div className="flex items-center justify-between">
@@ -426,17 +428,27 @@ export default function SplitResult({
         )}
 
         {/* Settlement completed */}
-        {settlement && (
+        {(settlement || settlementOnChain) && (
           <div className="space-y-3">
-            <TxHashRow
-              label="Split & Settle"
-              hash={settlement.settleTxHash}
-              explorerBaseUrl={settlement.explorerBaseUrl}
-            />
+            {settlement?.settleTxHash ? (
+              <TxHashRow
+                label="Split & Settle"
+                hash={settlement.settleTxHash}
+                explorerBaseUrl={settlement.explorerBaseUrl}
+              />
+            ) : (
+              <div className="flex items-center justify-between rounded-md bg-muted/30 px-4 py-3">
+                <span className="text-sm text-muted-foreground">On-chain state</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-green-600">SETTLED</span>
+                  <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+                </div>
+              </div>
+            )}
             <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground/60">
               Shapley split ratios verified via EIP-712 signature and funds
               distributed via SplitVault smart contract (USDC ERC-20).
-              {settlement.explorerBaseUrl
+              {settlement?.explorerBaseUrl
                 ? " View transaction on Base Sepolia explorer."
                 : " Running on local Hardhat node."}
             </p>
@@ -444,7 +456,7 @@ export default function SplitResult({
         )}
 
         {/* No contract configured */}
-        {!settlementPending && !settlement && !settlementSignature && (
+        {!settlementPending && !settlement && !settlementOnChain && !settlementSignature && (
           <div className="space-y-3">
             <p className="text-sm text-muted-foreground/60">
               Off-chain only &mdash; no settlement signature available for this result yet.

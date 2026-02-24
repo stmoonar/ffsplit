@@ -161,6 +161,7 @@ export function calculateShapley(
       agent_address: getAgentAddress(agent),
       shapley_value: Math.round(shapleyValue * 100) / 100,
       share_percent: Math.round(sharePercent * 100) / 100,
+      share_raw: sharePercent, // unrounded for precise bp conversion
       payout_usdc:
         Math.round(((sharePercent / 100) * paymentUsdc) * 100) / 100,
     };

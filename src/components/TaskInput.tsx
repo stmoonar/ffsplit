@@ -68,8 +68,9 @@ export default function TaskInput({ onSubmit, hasModel, defaultProfile }: TaskIn
                 type="number"
                 value={payment}
                 onChange={(e) => setPayment(Number(e.target.value))}
-                min={1}
-                max={1000}
+                min={0.000001}
+                max={1000000}
+                step={0.000001}
                 className="h-12 w-full rounded-lg border border-border bg-transparent px-5 pr-20 font-serif text-xl text-foreground transition-colors duration-200 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
               />
               <span className="absolute right-5 top-1/2 -translate-y-1/2 text-sm font-medium text-muted-foreground">
