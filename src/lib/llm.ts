@@ -15,17 +15,17 @@ const PROVIDER_DEFAULTS: Record<
   LLMProvider,
   { baseUrl: string; model: string }
 > = {
-  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-  deepseek: { baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
-  kimi: { baseUrl: "https://api.moonshot.cn/v1", model: "moonshot-v1-8k" },
+  openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-5-mini" },
+  deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
+  kimi: { baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.5" },
   claude: {
     baseUrl: "https://api.anthropic.com/v1",
-    model: "claude-3-5-sonnet-20241022",
+    model: "claude-sonnet-4-6",
   },
   gemini: { baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.5-flash" },
-  qwen: { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-max" },
-  grok: { baseUrl: "https://api.x.ai/v1", model: "grok-2-latest" },
-  ollama: { baseUrl: "http://localhost:11434/v1", model: "llama3.2" },
+  qwen: { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
+  grok: { baseUrl: "https://api.x.ai/v1", model: "grok-3-mini" },
+  ollama: { baseUrl: "http://localhost:11434/v1", model: "llama3.3" },
 };
 
 export const PROVIDER_LABELS: Record<LLMProvider, string> = {
@@ -42,14 +42,14 @@ export const PROVIDER_LABELS: Record<LLMProvider, string> = {
 /** Fallback model lists — used when the provider's /models API is unavailable
  *  (e.g. Anthropic has no such endpoint) or when no API key is configured yet. */
 export const FALLBACK_MODELS: Record<LLMProvider, string[]> = {
-  openai: ["gpt-4o", "gpt-4o-mini", "o1", "o3-mini"],
+  openai: ["gpt-5.2", "gpt-5.1", "gpt-5", "gpt-5-mini", "gpt-5-nano", "o3"],
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
-  kimi: ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
-  claude: ["claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"],
-  gemini: ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.0-pro-exp"],
-  qwen: ["qwen-plus", "qwen-max", "qwen-long", "qwen-turbo", "qwen2.5-coder-32b-instruct"],
-  grok: ["grok-2-latest", "grok-2-vision-latest"],
-  ollama: ["llama3.2", "qwen2.5", "deepseek-r1"],
+  kimi: ["kimi-k2.5", "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"],
+  claude: ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
+  gemini: ["gemini-3.1-pro", "gemini-3-pro", "gemini-2.5-flash", "gemini-2.5-pro"],
+  qwen: ["qwen3.5-plus", "qwen3-max", "qwen-plus", "qwen-flash", "qwen3-vl-plus"],
+  grok: ["grok-4", "grok-3", "grok-3-mini"],
+  ollama: ["llama3.3", "deepseek-r1:7b", "qwen2.5:7b", "phi4:14b"],
 };
 
 function getBaseUrl(config: LLMConfig): string {

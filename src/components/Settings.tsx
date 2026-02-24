@@ -296,26 +296,20 @@ export default function Settings({
               </div>
               <input
                 type="text"
-                list={`${provider}-models`}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 placeholder={getDefaultModel(provider)}
-                className="h-11 w-full rounded-lg border border-border bg-transparent px-4 font-mono text-sm text-foreground transition-colors duration-200 placeholder:text-muted-foreground/40 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
+                className="h-11 w-full rounded-lg border border-border bg-transparent px-4 text-sm text-foreground transition-colors duration-200 placeholder:text-muted-foreground/40 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
               />
-              <datalist id={`${provider}-models`}>
-                {displayModels.map((m) => (
-                  <option key={m} value={m} />
-                ))}
-              </datalist>
-              <div className="mt-2 flex flex-wrap gap-1.5">
+              <div className="mt-2.5 flex flex-wrap gap-1.5">
                 {displayModels.map((m) => (
                   <button
                     key={m}
                     type="button"
                     onClick={() => setModel(m)}
-                    className={`rounded-md border px-2 py-1 text-[11px] font-mono transition-colors ${model === m
-                      ? "border-accent bg-accent/10 text-accent"
-                      : "border-border text-muted-foreground hover:border-border-hover hover:text-foreground"
+                    className={`rounded-md border px-2.5 py-1 text-[12px] transition-colors ${model === m
+                        ? "border-accent bg-accent/10 text-accent font-medium"
+                        : "border-border text-muted-foreground hover:border-border-hover hover:text-foreground"
                       }`}
                   >
                     {m}
