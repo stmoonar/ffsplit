@@ -144,5 +144,6 @@ export interface HistoryRecord {
   agentOutputs: Record<string, string>;
   traces: ContributionTrace[];
   shapleyResult: ShapleyResult;
+  settlementSignature: SettlementSignatureData | null;
   settlementResult: SettlementResult | null;
 }

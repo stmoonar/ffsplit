@@ -10,6 +10,7 @@ import {
   isContractConfigured,
   signSplitData,
   verifyCreateTaskTx,
+  getTaskAgentAddresses,
   getVaultAddress,
   getUsdcAddress,
   getChainId,
@@ -265,17 +266,33 @@ export async function POST(request: NextRequest) {
         if (isContractConfigured()) {
           send({ type: "settlement_start" });
           try {
-            const agents = shapleyResult.agents.map((a) => getAgentAddress(a.agent));
-            const sharesBasisPoints = shapleyResult.agents.map((a) =>
-              Math.round(a.share_percent * 100)
+            const taskIdBytes32 = /^0x[a-fA-F0-9]{64}$/.test(taskId)
+              ? taskId
+              : ethers.id(taskId);
+
+            const shapleyAddressMap = new Map<string, number>();
+            for (const agent of shapleyResult.agents) {
+              const address = getAgentAddress(agent.agent).toLowerCase();
+              shapleyAddressMap.set(address, Math.round(agent.share_percent * 100));
+            }
+
+            const agents = await getTaskAgentAddresses(taskIdBytes32);
+            if (agents.length === 0) {
+              throw new Error("On-chain task has no agents");
+            }
+
+            const sharesBasisPoints = agents.map(
+              (address) => shapleyAddressMap.get(address.toLowerCase()) ?? 0
             );
 
             const bpSum = sharesBasisPoints.reduce((s, v) => s + v, 0);
             if (bpSum !== 10000) {
-              sharesBasisPoints[0] += 10000 - bpSum;
+              const synthIndex = agents.findIndex(
+                (address) => address.toLowerCase() === getAgentAddress("synthesizer").toLowerCase()
+              );
+              const targetIndex = synthIndex >= 0 ? synthIndex : 0;
+              sharesBasisPoints[targetIndex] += 10000 - bpSum;
             }
-
-            const taskIdBytes32 = ethers.id(taskId);
 
             // Sign the split data instead of submitting directly
             const signedData = await signSplitData(

@@ -16,6 +16,7 @@ interface SplitResultProps {
   settlementPending?: boolean;
   settlementSignature?: SettlementSignatureData | null;
   onSettle?: () => void;
+  onRegenerateSignature?: () => void;
   walletConnected?: boolean;
 }
 
@@ -74,6 +75,7 @@ export default function SplitResult({
   settlementPending,
   settlementSignature,
   onSettle,
+  onRegenerateSignature,
   walletConnected,
 }: SplitResultProps) {
   const [showDerivation, setShowDerivation] = useState(false);
@@ -443,10 +445,19 @@ export default function SplitResult({
 
         {/* No contract configured */}
         {!settlementPending && !settlement && !settlementSignature && (
-          <p className="text-sm text-muted-foreground/60">
-            Off-chain only &mdash; no smart contract configured. Start a local
-            Hardhat node and deploy to enable on-chain settlement.
-          </p>
+          <div className="space-y-3">
+            <p className="text-sm text-muted-foreground/60">
+              Off-chain only &mdash; no settlement signature available for this result yet.
+            </p>
+            {onRegenerateSignature && (
+              <button
+                onClick={onRegenerateSignature}
+                className="h-10 w-full rounded-md border border-border bg-card text-sm font-medium text-foreground transition-colors duration-200 hover:border-accent hover:text-accent"
+              >
+                Regenerate Settlement Signature
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>

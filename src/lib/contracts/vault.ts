@@ -159,6 +159,13 @@ export async function verifyCreateTaskTx(
   }
 }
 
+// Server-side: Read agent addresses recorded in a task on-chain
+export async function getTaskAgentAddresses(taskIdBytes32: string): Promise<string[]> {
+  const vault = getVaultContract();
+  const task = await vault.getTask(taskIdBytes32);
+  return task[1] as string[];
+}
+
 // Client-side helpers
 export function getVaultAddress(): string {
   return VAULT_ADDRESS;

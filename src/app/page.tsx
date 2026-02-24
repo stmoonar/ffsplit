@@ -175,6 +175,7 @@ export default function Home() {
       const localAgentOutputs: Record<string, string> = {};
       const localTraces: ContributionTrace[] = [];
       let localShapleyResult: ShapleyResult | null = null;
+      let localSettlementSignature: SettlementSignatureData | null = null;
       let localSettlementResult: SettlementResult | null = null;
 
       while (true) {
@@ -228,6 +229,7 @@ export default function Home() {
               case "settlement_signature":
                 setSettlementPending(false);
                 setSettlementSignature(event.data);
+                localSettlementSignature = event.data;
                 break;
               case "settlement_result":
                 localSettlementResult = event.result;
@@ -246,6 +248,7 @@ export default function Home() {
                     agentOutputs: { ...localAgentOutputs },
                     traces: [...localTraces],
                     shapleyResult: localShapleyResult,
+                    settlementSignature: localSettlementSignature,
                     settlementResult: localSettlementResult,
                   });
                 }
@@ -297,6 +300,7 @@ export default function Home() {
 
         if (result?.type === "payment_required" && walletAddress) {
           const paymentInfo = result.paymentInfo;
+          const requiredChainId = Number(paymentInfo.chain_id);
 
           // Step 2: Compute taskId (cryptographically bound)
           const nonce = Date.now();
@@ -305,13 +309,86 @@ export default function Home() {
             [query, walletAddress, nonce]
           );
 
-          const provider = new ethers.BrowserProvider(window.ethereum!);
-          const signer = await provider.getSigner();
+          let provider = new ethers.BrowserProvider(window.ethereum!);
+          let signer = await provider.getSigner();
+          let signerAddress = await signer.getAddress();
           const amountRaw = BigInt(paymentInfo.amount_raw);
+
+          // Step 2.5: Ensure wallet is on required chain
+          const network = await provider.getNetwork();
+          if (Number(network.chainId) !== requiredChainId) {
+            const chainIdHex = ethers.toBeHex(requiredChainId);
+            try {
+              await window.ethereum!.request({
+                method: "wallet_switchEthereumChain",
+                params: [{ chainId: chainIdHex }],
+              });
+            } catch (switchError) {
+              const err = switchError as { code?: number };
+              if (err.code === 4902 && requiredChainId === 31337) {
+                await window.ethereum!.request({
+                  method: "wallet_addEthereumChain",
+                  params: [
+                    {
+                      chainId: chainIdHex,
+                      chainName: "Hardhat Local",
+                      nativeCurrency: {
+                        name: "Ether",
+                        symbol: "ETH",
+                        decimals: 18,
+                      },
+                      rpcUrls: ["http://127.0.0.1:8545"],
+                    },
+                  ],
+                });
+              } else {
+                throw new Error(
+                  `Please switch wallet network to chainId=${requiredChainId} before payment.`
+                );
+              }
+            }
+
+            provider = new ethers.BrowserProvider(window.ethereum!);
+            signer = await provider.getSigner();
+            signerAddress = await signer.getAddress();
+
+            const switchedNetwork = await provider.getNetwork();
+            if (Number(switchedNetwork.chainId) !== requiredChainId) {
+              throw new Error(
+                `Wallet is on chainId=${Number(switchedNetwork.chainId)}, expected ${requiredChainId}.`
+              );
+            }
+            setWalletChainId(Number(switchedNetwork.chainId));
+          }
+
+          // Step 2.6: Verify target contracts exist on current network
+          const [usdcCode, vaultCode] = await Promise.all([
+            provider.getCode(paymentInfo.usdc_address),
+            provider.getCode(paymentInfo.vault_address),
+          ]);
+
+          if (usdcCode === "0x") {
+            throw new Error(
+              `USDC contract not found at ${paymentInfo.usdc_address} on chain ${requiredChainId}. Restart hardhat node and redeploy contracts.`
+            );
+          }
+
+          if (vaultCode === "0x") {
+            throw new Error(
+              `Vault contract not found at ${paymentInfo.vault_address} on chain ${requiredChainId}. Restart hardhat node and redeploy contracts.`
+            );
+          }
 
           // Step 3: Check allowance, approve if needed
           const usdcContract = new ethers.Contract(paymentInfo.usdc_address, ERC20_ABI, signer);
-          const allowance = await usdcContract.allowance(walletAddress, paymentInfo.vault_address);
+          let allowance: bigint;
+          try {
+            allowance = await usdcContract.allowance(signerAddress, paymentInfo.vault_address);
+          } catch {
+            throw new Error(
+              "Failed to read USDC allowance. Check wallet network, contract addresses, and whether local contracts were redeployed."
+            );
+          }
 
           if (allowance < amountRaw) {
             setPhase("approving");
@@ -396,6 +473,44 @@ export default function Home() {
     }
   }, [settlementSignature]);
 
+  const handleRegenerateSettlementSignature = useCallback(async () => {
+    if (!shapleyResult) return;
+
+    if (!/^0x[a-fA-F0-9]{64}$/.test(shapleyResult.task_id)) {
+      setErrorMessage("This task was not created as an on-chain paid task and cannot be settled on-chain.");
+      return;
+    }
+
+    setSettlementPending(true);
+    setErrorMessage(null);
+    try {
+      const response = await fetch("/api/settlement-sign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          task_id: shapleyResult.task_id,
+          agents: shapleyResult.agents.map((agent) => ({
+            agent: agent.agent,
+            share_percent: agent.share_percent,
+          })),
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || `Failed to regenerate signature (${response.status})`);
+      }
+
+      setSettlementSignature(data as SettlementSignatureData);
+    } catch (error) {
+      setErrorMessage(
+        `Settlement signature regeneration failed: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    } finally {
+      setSettlementPending(false);
+    }
+  }, [shapleyResult]);
+
   const handleLoadHistory = useCallback((record: HistoryRecord) => {
     abortRef.current?.abort();
     abortRef.current = null;
@@ -407,8 +522,8 @@ export default function Home() {
     setCompletedAgents(new Set(Object.keys(record.agentOutputs)));
     setTraces(record.traces);
     setShapleyResult(record.shapleyResult);
+    setSettlementSignature(record.settlementSignature || null);
     setSettlementResult(record.settlementResult);
-    setSettlementSignature(null);
     setSettlementPending(false);
     setErrorMessage(null);
     setPhase("result");
@@ -583,6 +698,7 @@ export default function Home() {
               settlementPending={settlementPending}
               settlementSignature={settlementSignature}
               onSettle={handleSettle}
+              onRegenerateSignature={handleRegenerateSettlementSignature}
               walletConnected={!!walletAddress}
             />
           </div>
