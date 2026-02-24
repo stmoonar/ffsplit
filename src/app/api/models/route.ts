@@ -6,10 +6,14 @@ import { NextRequest, NextResponse } from "next/server";
  * Anthropic (Claude) does NOT have such an endpoint, so the client
  * should fall back to a hardcoded list for that provider.
  *
- * Query params:
+ * POST body:
  *   provider  – one of the supported LLMProvider values
- *   apiKey    – the user's API key (sent via header, NOT logged)
- *   baseUrl   – (optional) custom base URL override
+ *   apiKey    – the user's API key (sent via body, NOT via URL)
+ *   baseUrl   – (optional) custom base URL override (validated against whitelist)
+ *
+ * Security:
+ * - Uses POST instead of GET to prevent API key exposure in logs/URLs
+ * - Validates baseUrl against a whitelist to prevent SSRF attacks
  */
 
 // Default base URLs — mirrors what lives in lib/llm.ts but we keep a
@@ -24,11 +28,49 @@ const BASE_URLS: Record<string, string> = {
     ollama: "http://localhost:11434/v1",
 };
 
-export async function GET(req: NextRequest) {
-    const { searchParams } = req.nextUrl;
-    const provider = searchParams.get("provider") || "";
-    const apiKey = searchParams.get("apiKey") || "";
-    const customBaseUrl = searchParams.get("baseUrl") || "";
+// SSRF Protection: Only allow known provider domains or localhost for ollama
+function validateBaseUrl(baseUrl: string, provider: string): boolean {
+    if (!baseUrl) return false;
+
+    try {
+        const url = new URL(baseUrl);
+        const hostname = url.hostname.toLowerCase();
+
+        // Allowed domains for each provider
+        const allowedDomains: Record<string, string[]> = {
+            openai: ["api.openai.com"],
+            deepseek: ["api.deepseek.com"],
+            kimi: ["api.moonshot.cn"],
+            gemini: ["generativelanguage.googleapis.com"],
+            qwen: ["dashscope.aliyuncs.com"],
+            grok: ["api.x.ai"],
+            ollama: ["localhost", "127.0.0.1", "::1"], // Localhost only for ollama
+        };
+
+        const allowedForProvider = allowedDomains[provider];
+        if (!allowedForProvider) {
+            return false;
+        }
+
+        return allowedForProvider.includes(hostname);
+    } catch {
+        // Invalid URL
+        return false;
+    }
+}
+
+export async function POST(req: NextRequest) {
+    // Parse request body
+    let body: { provider?: string; apiKey?: string; baseUrl?: string };
+    try {
+        body = await req.json();
+    } catch (err) {
+        return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    const provider = body.provider || "";
+    const apiKey = body.apiKey || "";
+    const customBaseUrl = body.baseUrl || "";
 
     // Anthropic has no /models endpoint
     if (provider === "claude") {
@@ -37,7 +79,17 @@ export async function GET(req: NextRequest) {
         }, { status: 501 });
     }
 
-    const baseUrl = customBaseUrl || BASE_URLS[provider];
+    // SSRF Protection: Validate custom baseUrl against whitelist
+    let baseUrl = BASE_URLS[provider];
+    if (customBaseUrl) {
+        if (!validateBaseUrl(customBaseUrl, provider)) {
+            return NextResponse.json({
+                error: "Invalid baseUrl. Only known provider domains and localhost (for ollama) are allowed."
+            }, { status: 400 });
+        }
+        baseUrl = customBaseUrl;
+    }
+
     if (!baseUrl) {
         return NextResponse.json({ error: `Unknown provider: ${provider}` }, { status: 400 });
     }

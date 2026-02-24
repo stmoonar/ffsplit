@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   SSEEvent,
   ContributionTrace,
@@ -39,6 +39,8 @@ export default function Home() {
     useState<TaskDecomposition | null>(null);
   const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   // Load LLM config from localStorage on mount
   useEffect(() => {
@@ -69,6 +71,12 @@ export default function Home() {
       setTraces([]);
       setShapleyResult(null);
       setDecomposition(null);
+      setErrorMessage(null);
+
+      // Abort any previous in-flight request
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
 
       try {
         const response = await fetch("/api/task", {
@@ -79,8 +87,13 @@ export default function Home() {
             payment_usdc: payment,
             llm_config: llmConfig,
           }),
+          signal: controller.signal,
         });
 
+        if (!response.ok) {
+          const text = await response.text().catch(() => "");
+          throw new Error(text || `Server error (${response.status})`);
+        }
         if (!response.body) throw new Error("No response body");
 
         const reader = response.body.getReader();
@@ -130,6 +143,15 @@ export default function Home() {
                   setShapleyResult(event.result);
                   setPhase("result");
                   break;
+                // Handle task completion event for proper cleanup
+                case "task_complete":
+                  console.log("Task completed:", event.task_id);
+                  break;
+                case "error":
+                  console.error("Backend error:", event.message);
+                  setErrorMessage(event.message);
+                  setPhase("input");
+                  break;
               }
             } catch {
               // Skip malformed events
@@ -137,7 +159,9 @@ export default function Home() {
           }
         }
       } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") return;
         console.error("Task failed:", error);
+        setErrorMessage(error instanceof Error ? error.message : "Unknown error");
         setPhase("input");
       }
     },
@@ -145,6 +169,8 @@ export default function Home() {
   );
 
   const handleReset = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     setPhase("input");
     setAgentOutputs({ researcher_a: "", researcher_b: "", synthesizer: "" });
     setActiveAgents(new Set());
@@ -152,6 +178,7 @@ export default function Home() {
     setTraces([]);
     setShapleyResult(null);
     setDecomposition(null);
+    setErrorMessage(null);
   }, []);
 
   return (
@@ -186,6 +213,26 @@ export default function Home() {
       </header>
 
       <div className="mx-auto max-w-5xl px-8 py-12">
+        {/* Error Banner */}
+        {errorMessage && phase === "input" && (
+          <div className="mb-8 animate-fade-in rounded-lg border border-red-500/30 bg-red-500/5 px-5 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex-1">
+                <p className="text-sm font-medium text-red-400">Task Failed</p>
+                <p className="mt-1 text-sm text-red-400/80">{errorMessage}</p>
+              </div>
+              <button
+                onClick={() => setErrorMessage(null)}
+                className="flex-shrink-0 text-red-400/60 transition-colors hover:text-red-400"
+              >
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Phase 1: Task Input */}
         {phase === "input" && (
           <div className="animate-fade-in">

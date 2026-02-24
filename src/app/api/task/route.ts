@@ -3,8 +3,19 @@ import { decomposeTask } from "@/lib/agents/decompose";
 import { runWorkerAgent } from "@/lib/agents/worker";
 import { streamSynthesizer } from "@/lib/agents/synthesizer";
 import { calculateShapley } from "@/lib/shapley";
-import { verifyTrace } from "@/lib/trace";
+import { verifyTrace, validateAgentKeys } from "@/lib/trace";
 import { SSEEvent, ContributionTrace, LLMConfig } from "@/lib/types";
+
+// Fail-fast: validate agent private keys match expected addresses on module load
+try {
+  validateAgentKeys();
+} catch (error) {
+  console.error("FATAL: Agent key validation failed:", error);
+  // In development, log the error but don't crash the module
+  if (process.env.NODE_ENV !== "development") {
+    throw error;
+  }
+}
 
 function sseEncode(event: SSEEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;

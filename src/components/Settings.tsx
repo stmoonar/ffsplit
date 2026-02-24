@@ -37,10 +37,13 @@ async function fetchModelsFromProvider(
   apiKey: string,
   baseUrl?: string
 ): Promise<string[]> {
-  const params = new URLSearchParams({ provider, apiKey });
-  if (baseUrl) params.set("baseUrl", baseUrl);
-
-  const res = await fetch(`/api/models?${params.toString()}`);
+  const res = await fetch("/api/models", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ provider, apiKey, baseUrl }),
+  });
   if (!res.ok) return [];
 
   const json = await res.json();
@@ -194,7 +197,7 @@ export default function Settings({
               onClick={handleClose}
               className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
-              ✕
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M2 2l10 10M12 2L2 12"/></svg>
             </button>
           </div>
 
@@ -278,7 +281,7 @@ export default function Settings({
                 {modelListState === "loading" && (
                   <span className="flex items-center gap-1.5 text-[10px] text-muted-foreground/60">
                     <span className="inline-block h-2 w-2 animate-spin rounded-full border border-accent border-t-transparent" />
-                    Fetching models…
+                    Fetching models&hellip;
                   </span>
                 )}
                 {modelListState === "done" && modelList.length > 0 && (
@@ -328,7 +331,7 @@ export default function Settings({
                 <span
                   className={`inline-block transition-transform duration-200 ${showAdvanced ? "rotate-90" : ""}`}
                 >
-                  ▸
+                  &#9656;
                 </span>
                 <span className="font-semibold uppercase tracking-wide">
                   Advanced

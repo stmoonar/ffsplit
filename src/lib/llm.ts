@@ -169,14 +169,18 @@ async function* openaiCompatibleChatStream(
   let outputTokens = 0;
 
   if (reader) {
+    // Buffer needed because SSE lines can span multiple chunks
+    let buffer = "";
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      const text = decoder.decode(value);
-      const lines = text.split("\n").filter((l) => l.startsWith("data: "));
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
 
       for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
         const data = line.slice(6);
         if (data === "[DONE]") break;
 
