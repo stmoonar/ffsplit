@@ -5,9 +5,9 @@ import {
   SSEEvent,
   ContributionTrace,
   ShapleyResult,
-  AgentId,
+  SettlementResult,
   TaskDecomposition,
-  LLMConfig,
+  ModelProfile,
 } from "@/lib/types";
 import TaskInput from "@/components/TaskInput";
 import AgentFlow from "@/components/AgentFlow";
@@ -15,65 +15,89 @@ import SplitResult from "@/components/SplitResult";
 import Settings from "@/components/Settings";
 import { RiSettings3Line } from "@remixicon/react";
 
-const LLM_STORAGE_KEY = "fairsplit_llm_config";
+const PROFILES_STORAGE_KEY = "fairsplit_model_profiles";
+const DEFAULT_PROFILE_STORAGE_KEY = "fairsplit_default_profile_id";
+const AGENT_ASSIGNMENTS_STORAGE_KEY = "fairsplit_agent_assignments";
 
 type AppPhase = "input" | "running" | "result";
 
 export default function Home() {
   const [phase, setPhase] = useState<AppPhase>("input");
-  const [agentOutputs, setAgentOutputs] = useState<Record<AgentId, string>>({
-    researcher_a: "",
-    researcher_b: "",
-    synthesizer: "",
-  });
-  const [activeAgents, setActiveAgents] = useState<Set<AgentId>>(new Set());
-  const [completedAgents, setCompletedAgents] = useState<Set<AgentId>>(
-    new Set()
-  );
+  const [agentOutputs, setAgentOutputs] = useState<Record<string, string>>({});
+  const [activeAgents, setActiveAgents] = useState<Set<string>>(new Set());
+  const [completedAgents, setCompletedAgents] = useState<Set<string>>(new Set());
   const [traces, setTraces] = useState<ContributionTrace[]>([]);
-  const [shapleyResult, setShapleyResult] = useState<ShapleyResult | null>(
-    null
-  );
+  const [shapleyResult, setShapleyResult] = useState<ShapleyResult | null>(null);
   const [paymentUsdc, setPaymentUsdc] = useState(10);
-  const [decomposition, setDecomposition] =
-    useState<TaskDecomposition | null>(null);
-  const [llmConfig, setLlmConfig] = useState<LLMConfig | null>(null);
+  const [decomposition, setDecomposition] = useState<TaskDecomposition | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [settlementResult, setSettlementResult] = useState<SettlementResult | null>(null);
+  const [settlementPending, setSettlementPending] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Load LLM config from localStorage on mount
+  // Model profile state
+  const [profiles, setProfiles] = useState<ModelProfile[]>([]);
+  const [defaultProfileId, setDefaultProfileId] = useState<string | null>(null);
+  const [agentAssignments, setAgentAssignments] = useState<Record<string, string>>({});
+
+  // Load config from localStorage on mount
   useEffect(() => {
     try {
-      const stored = localStorage.getItem(LLM_STORAGE_KEY);
-      if (stored) setLlmConfig(JSON.parse(stored));
-    } catch {
-      // Ignore parse errors
-    }
+      const stored = localStorage.getItem(PROFILES_STORAGE_KEY);
+      if (stored) setProfiles(JSON.parse(stored));
+    } catch { /* ignore */ }
+    try {
+      const stored = localStorage.getItem(DEFAULT_PROFILE_STORAGE_KEY);
+      if (stored) setDefaultProfileId(JSON.parse(stored));
+    } catch { /* ignore */ }
+    try {
+      const stored = localStorage.getItem(AGENT_ASSIGNMENTS_STORAGE_KEY);
+      if (stored) setAgentAssignments(JSON.parse(stored));
+    } catch { /* ignore */ }
   }, []);
 
-  const handleSaveConfig = useCallback((config: LLMConfig | null) => {
-    setLlmConfig(config);
-    if (config) {
-      localStorage.setItem(LLM_STORAGE_KEY, JSON.stringify(config));
-    } else {
-      localStorage.removeItem(LLM_STORAGE_KEY);
-    }
-  }, []);
+  const handleSaveConfig = useCallback(
+    (newProfiles: ModelProfile[], newDefaultId: string | null, newAssignments: Record<string, string>) => {
+      setProfiles(newProfiles);
+      setDefaultProfileId(newDefaultId);
+      setAgentAssignments(newAssignments);
+
+      if (newProfiles.length > 0) {
+        localStorage.setItem(PROFILES_STORAGE_KEY, JSON.stringify(newProfiles));
+      } else {
+        localStorage.removeItem(PROFILES_STORAGE_KEY);
+      }
+
+      if (newDefaultId) {
+        localStorage.setItem(DEFAULT_PROFILE_STORAGE_KEY, JSON.stringify(newDefaultId));
+      } else {
+        localStorage.removeItem(DEFAULT_PROFILE_STORAGE_KEY);
+      }
+
+      if (Object.keys(newAssignments).length > 0) {
+        localStorage.setItem(AGENT_ASSIGNMENTS_STORAGE_KEY, JSON.stringify(newAssignments));
+      } else {
+        localStorage.removeItem(AGENT_ASSIGNMENTS_STORAGE_KEY);
+      }
+    },
+    []
+  );
 
   const handleSubmit = useCallback(
     async (query: string, payment: number) => {
       setPaymentUsdc(payment);
       setPhase("running");
-      setAgentOutputs({ researcher_a: "", researcher_b: "", synthesizer: "" });
+      setAgentOutputs({});
       setActiveAgents(new Set());
       setCompletedAgents(new Set());
       setTraces([]);
       setShapleyResult(null);
       setDecomposition(null);
       setErrorMessage(null);
+      setSettlementResult(null);
+      setSettlementPending(false);
 
-      // Abort any previous in-flight request
       abortRef.current?.abort();
       const controller = new AbortController();
       abortRef.current = controller;
@@ -85,7 +109,9 @@ export default function Home() {
           body: JSON.stringify({
             query,
             payment_usdc: payment,
-            llm_config: llmConfig,
+            model_profiles: profiles,
+            default_profile_id: defaultProfileId,
+            agent_assignments: agentAssignments,
           }),
           signal: controller.signal,
         });
@@ -118,14 +144,13 @@ export default function Home() {
                   setDecomposition(event.decomposition);
                   break;
                 case "agent_start":
-                  setActiveAgents(
-                    (prev) => new Set([...prev, event.agent])
-                  );
+                  setActiveAgents((prev) => new Set([...prev, event.agent]));
+                  setAgentOutputs((prev) => ({ ...prev, [event.agent]: prev[event.agent] || "" }));
                   break;
                 case "agent_chunk":
                   setAgentOutputs((prev) => ({
                     ...prev,
-                    [event.agent]: prev[event.agent] + event.content,
+                    [event.agent]: (prev[event.agent] || "") + event.content,
                   }));
                   break;
                 case "agent_done":
@@ -134,23 +159,31 @@ export default function Home() {
                     next.delete(event.agent);
                     return next;
                   });
-                  setCompletedAgents(
-                    (prev) => new Set([...prev, event.agent])
-                  );
+                  setCompletedAgents((prev) => new Set([...prev, event.agent]));
                   setTraces((prev) => [...prev, event.trace]);
                   break;
                 case "shapley_result":
                   setShapleyResult(event.result);
                   setPhase("result");
                   break;
-                // Handle task completion event for proper cleanup
+                case "settlement_start":
+                  setSettlementPending(true);
+                  break;
+                case "settlement_result":
+                  setSettlementPending(false);
+                  setSettlementResult(event.result);
+                  break;
                 case "task_complete":
-                  console.log("Task completed:", event.task_id);
+                  setSettlementPending(false);
                   break;
                 case "error":
                   console.error("Backend error:", event.message);
-                  setErrorMessage(event.message);
-                  setPhase("input");
+                  if (event.message.startsWith("On-chain settlement failed")) {
+                    setSettlementPending(false);
+                  } else {
+                    setErrorMessage(event.message);
+                    setPhase("input");
+                  }
                   break;
               }
             } catch {
@@ -165,21 +198,27 @@ export default function Home() {
         setPhase("input");
       }
     },
-    [llmConfig]
+    [profiles, defaultProfileId, agentAssignments]
   );
 
   const handleReset = useCallback(() => {
     abortRef.current?.abort();
     abortRef.current = null;
     setPhase("input");
-    setAgentOutputs({ researcher_a: "", researcher_b: "", synthesizer: "" });
+    setAgentOutputs({});
     setActiveAgents(new Set());
     setCompletedAgents(new Set());
     setTraces([]);
     setShapleyResult(null);
     setDecomposition(null);
     setErrorMessage(null);
+    setSettlementResult(null);
+    setSettlementPending(false);
   }, []);
+
+  // Determine if any model is configured
+  const hasModelConfigured = profiles.length > 0 && profiles.some((p) => p.apiKey.trim() || p.provider === "ollama");
+  const defaultProfile = profiles.find((p) => p.id === defaultProfileId);
 
   return (
     <main className="min-h-screen">
@@ -236,7 +275,6 @@ export default function Home() {
         {/* Phase 1: Task Input */}
         {phase === "input" && (
           <div className="animate-fade-in">
-            {/* Hero section */}
             <div className="mb-16 text-center">
               <div className="mb-6 flex items-center justify-center gap-4">
                 <span className="h-px flex-1 max-w-[120px] bg-border" />
@@ -257,7 +295,11 @@ export default function Home() {
               </p>
             </div>
 
-            <TaskInput onSubmit={handleSubmit} llmConfig={llmConfig} />
+            <TaskInput
+              onSubmit={handleSubmit}
+              hasModel={hasModelConfigured}
+              defaultProfile={defaultProfile || null}
+            />
           </div>
         )}
 
@@ -281,6 +323,8 @@ export default function Home() {
               result={shapleyResult}
               paymentUsdc={paymentUsdc}
               traces={traces}
+              settlement={settlementResult}
+              settlementPending={settlementPending}
             />
           </div>
         )}
@@ -297,7 +341,9 @@ export default function Home() {
       <Settings
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        llmConfig={llmConfig}
+        profiles={profiles}
+        defaultProfileId={defaultProfileId}
+        agentAssignments={agentAssignments}
         onSave={handleSaveConfig}
       />
     </main>

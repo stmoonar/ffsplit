@@ -10,6 +10,12 @@ interface ChatOptions {
   stream?: boolean;
 }
 
+function canCallProvider(config: LLMConfig | undefined): config is LLMConfig {
+  if (!config) return false;
+  if (config.provider === "ollama") return true;
+  return !!config.apiKey?.trim();
+}
+
 // Default models and base URLs for each provider
 const PROVIDER_DEFAULTS: Record<
   LLMProvider,
@@ -75,7 +81,7 @@ export async function chatCompletion(
   messages: ChatMessage[],
   options?: ChatOptions
 ): Promise<{ content: string; inputTokens: number; outputTokens: number } | null> {
-  if (!config?.apiKey) return null;
+  if (!canCallProvider(config)) return null;
 
   if (config.provider === "claude") {
     return claudeChat(config, messages, options);
@@ -90,7 +96,7 @@ export async function* chatCompletionStream(
   messages: ChatMessage[],
   options?: ChatOptions
 ): AsyncGenerator<string, { inputTokens: number; outputTokens: number }> {
-  if (!config?.apiKey) {
+  if (!canCallProvider(config)) {
     return { inputTokens: 0, outputTokens: 0 };
   }
 
@@ -111,13 +117,16 @@ async function openaiCompatibleChat(
 ): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   const baseUrl = getBaseUrl(config);
   const model = getModel(config);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (config.apiKey?.trim()) {
+    headers.Authorization = `Bearer ${config.apiKey}`;
+  }
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       messages,
@@ -144,13 +153,16 @@ async function* openaiCompatibleChatStream(
 ): AsyncGenerator<string, { inputTokens: number; outputTokens: number }> {
   const baseUrl = getBaseUrl(config);
   const model = getModel(config);
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (config.apiKey?.trim()) {
+    headers.Authorization = `Bearer ${config.apiKey}`;
+  }
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model,
       messages,

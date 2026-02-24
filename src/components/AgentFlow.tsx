@@ -1,25 +1,28 @@
 "use client";
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useMemo } from "react";
 import { AgentId, ContributionTrace, TaskDecomposition } from "@/lib/types";
 
 interface AgentFlowProps {
-  agentOutputs: Record<AgentId, string>;
-  activeAgents: Set<AgentId>;
-  completedAgents: Set<AgentId>;
+  agentOutputs: Record<string, string>;
+  activeAgents: Set<string>;
+  completedAgents: Set<string>;
   traces: ContributionTrace[];
   decomposition: TaskDecomposition | null;
 }
 
-const AGENT_META: Record<
-  AgentId,
-  { label: string; role: string; icon: string }
-> = {
-  researcher_a: { label: "Researcher A", role: "Data Collector", icon: "A" },
-  researcher_b: { label: "Researcher B", role: "Data Collector", icon: "B" },
-  synthesizer: { label: "Synthesizer", role: "Coordinator", icon: "S" },
-};
-
+function getAgentMeta(agentId: string): { label: string; role: string; icon: string } {
+  if (agentId === "synthesizer") {
+    return { label: "Synthesizer", role: "Coordinator", icon: "S" };
+  }
+  // Extract number from "worker_1", "worker_2", etc.
+  const num = parseInt(agentId.replace("worker_", ""), 10);
+  if (!isNaN(num)) {
+    return { label: `Worker ${num}`, role: "Researcher", icon: `${num}` };
+  }
+  // Fallback
+  return { label: agentId, role: "Agent", icon: agentId[0]?.toUpperCase() || "?" };
+}
 
 function StatusBadge({
   active,
@@ -59,14 +62,14 @@ function AgentPanel({
   trace,
   subtask,
 }: {
-  agent: AgentId;
+  agent: string;
   output: string;
   active: boolean;
   completed: boolean;
   trace?: ContributionTrace;
   subtask?: string;
 }) {
-  const meta = AGENT_META[agent];
+  const meta = getAgentMeta(agent);
   const outputRef = useRef<HTMLPreElement>(null);
 
   useEffect(() => {
@@ -170,6 +173,26 @@ export default function AgentFlow({
   traces,
   decomposition,
 }: AgentFlowProps) {
+  // Derive worker IDs from decomposition or agent outputs
+  const workerIds = useMemo(() => {
+    if (decomposition) {
+      return decomposition.subtasks.map((s) => s.id);
+    }
+    // Fallback: derive from agentOutputs keys
+    return Object.keys(agentOutputs).filter((id) => id !== "synthesizer");
+  }, [decomposition, agentOutputs]);
+
+  // Build subtask map for quick lookup
+  const subtaskMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (decomposition) {
+      for (const s of decomposition.subtasks) {
+        map[s.id] = s.description;
+      }
+    }
+    return map;
+  }, [decomposition]);
+
   return (
     <div>
       {/* Section label */}
@@ -182,38 +205,31 @@ export default function AgentFlow({
       {/* Task decomposition display */}
       {decomposition && (
         <div className="mb-6 rounded-lg border border-accent/20 bg-card p-4">
-          <p className="small-caps mb-2 text-accent">Task Decomposition</p>
+          <p className="small-caps mb-2 text-accent">
+            Task Decomposition ({decomposition.subtasks.length} subtasks)
+          </p>
           <div className="space-y-1 text-sm text-foreground/80">
-            <p>
-              <span className="font-semibold text-accent">A:</span>{" "}
-              {decomposition.subtask_a}
-            </p>
-            <p>
-              <span className="font-semibold text-accent">B:</span>{" "}
-              {decomposition.subtask_b}
-            </p>
+            {decomposition.subtasks.map((subtask, i) => (
+              <p key={subtask.id}>
+                <span className="font-semibold text-accent">{i + 1}:</span>{" "}
+                {subtask.description}
+              </p>
+            ))}
           </div>
         </div>
       )}
 
-      {/* Agent panels */}
-      <div className="grid gap-6 md:grid-cols-2">
-        {/* Researcher agents side by side */}
-        {(["researcher_a", "researcher_b"] as AgentId[]).map((agent) => (
+      {/* Worker agent panels in grid */}
+      <div className={`grid gap-6 ${workerIds.length <= 2 ? "md:grid-cols-2" : workerIds.length === 3 ? "md:grid-cols-3" : "md:grid-cols-2"}`}>
+        {workerIds.map((agentId) => (
           <AgentPanel
-            key={agent}
-            agent={agent}
-            output={agentOutputs[agent]}
-            active={activeAgents.has(agent)}
-            completed={completedAgents.has(agent)}
-            trace={traces.find((t) => t.agent === agent)}
-            subtask={
-              decomposition
-                ? agent === "researcher_a"
-                  ? decomposition.subtask_a
-                  : decomposition.subtask_b
-                : undefined
-            }
+            key={agentId}
+            agent={agentId}
+            output={agentOutputs[agentId] || ""}
+            active={activeAgents.has(agentId)}
+            completed={completedAgents.has(agentId)}
+            trace={traces.find((t) => t.agent === agentId)}
+            subtask={subtaskMap[agentId]}
           />
         ))}
       </div>
@@ -222,7 +238,7 @@ export default function AgentFlow({
       <div className="mt-6">
         <AgentPanel
           agent="synthesizer"
-          output={agentOutputs.synthesizer}
+          output={agentOutputs["synthesizer"] || ""}
           active={activeAgents.has("synthesizer")}
           completed={completedAgents.has("synthesizer")}
           trace={traces.find((t) => t.agent === "synthesizer")}

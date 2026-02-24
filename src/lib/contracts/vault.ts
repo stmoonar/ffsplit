@@ -6,7 +6,11 @@ const VAULT_ADDRESS = process.env.NEXT_PUBLIC_VAULT_ADDRESS || "";
 
 // Oracle private key for submitting splits (server-side only)
 const ORACLE_PRIVATE_KEY = process.env.ORACLE_PRIVATE_KEY || "";
-const RPC_URL = process.env.BASE_SEPOLIA_RPC || "https://sepolia.base.org";
+const RPC_URL =
+  process.env.BASE_SEPOLIA_RPC ||
+  (process.env.NODE_ENV === "development"
+    ? "http://127.0.0.1:8545"
+    : "https://sepolia.base.org");
 
 function getProvider() {
   return new ethers.JsonRpcProvider(RPC_URL);
@@ -42,6 +46,10 @@ export async function submitSplitAndSettle(
 
   const taskIdBytes32 = ethers.id(taskId);
 
+  // Manually manage nonce to avoid "nonce too low" errors
+  // when sending multiple transactions in sequence
+  let nonce = await oracleWallet.getNonce();
+
   // Check if task already exists on-chain
   const task = await vault.getTask(taskIdBytes32);
   let createTxHash: string | undefined;
@@ -50,17 +58,20 @@ export async function submitSplitAndSettle(
     // Create task on-chain (oracle pays for demo simplicity)
     const createTx = await vault.createTask(taskIdBytes32, agents, {
       value: paymentWei,
+      nonce: nonce++,
     });
     await createTx.wait();
     createTxHash = createTx.hash;
   }
 
   // Submit split ratios
-  const splitTx = await vault.submitSplit(taskIdBytes32, sharesBasisPoints);
+  const splitTx = await vault.submitSplit(taskIdBytes32, sharesBasisPoints, {
+    nonce: nonce++,
+  });
   await splitTx.wait();
 
   // Settle — distribute funds
-  const settleTx = await vault.settle(taskIdBytes32);
+  const settleTx = await vault.settle(taskIdBytes32, { nonce: nonce++ });
   await settleTx.wait();
 
   return {

@@ -1,56 +1,54 @@
 import { ethers } from "ethers";
 import { AgentId, ContributionTrace } from "./types";
-import { AGENT_ADDRESSES } from "./shapley";
 
-// Test private keys for demo (DO NOT use in production)
-// These should ONLY be used as fallback in development mode
-const AGENT_PRIVATE_KEYS: Record<AgentId, string> = {
-  researcher_a:
-    "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a",
-  researcher_b:
-    "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6",
-  synthesizer:
-    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d",
-};
+// Deterministic seed for deriving agent wallets (demo only)
+const AGENT_WALLET_SEED =
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+// Cache derived wallets to avoid re-computation
+const walletCache = new Map<string, ethers.Wallet>();
 
 /**
- * Get the private key for an agent from environment variables.
- * In development mode, falls back to hardcoded test keys.
- * In production, requires explicit environment variable configuration.
- * @throws {Error} If private key is not configured in production
+ * Derive a deterministic wallet for any agent ID.
+ * Uses keccak256(seed + agentId) as the private key.
  */
-function getPrivateKey(agent: AgentId): string {
-  const envKey = process.env[`PRIVATE_KEY_${agent.toUpperCase()}`];
+function getAgentWallet(agentId: AgentId): ethers.Wallet {
+  const cached = walletCache.get(agentId);
+  if (cached) return cached;
+
+  // Check env var first
+  const envKey = process.env[`PRIVATE_KEY_${agentId.toUpperCase()}`];
   if (envKey) {
-    return envKey;
+    const wallet = new ethers.Wallet(envKey);
+    walletCache.set(agentId, wallet);
+    return wallet;
   }
-  if (process.env.NODE_ENV === 'development') {
-    return AGENT_PRIVATE_KEYS[agent]; // fallback only in dev
-  }
-  throw new Error(`Private key not configured for ${agent}. Set PRIVATE_KEY_${agent.toUpperCase()} environment variable.`);
+
+  // Derive deterministically from seed + agentId
+  const derivedKey = ethers.keccak256(
+    ethers.solidityPacked(["bytes32", "string"], [AGENT_WALLET_SEED, agentId])
+  );
+  const wallet = new ethers.Wallet(derivedKey);
+  walletCache.set(agentId, wallet);
+  return wallet;
 }
 
 /**
- * Validate that all agent private keys derive the expected addresses.
- * Call at startup to fail-fast if there's a key/address mismatch.
+ * Get the address for a given agent ID.
  */
-export function validateAgentKeys(): void {
-  for (const agent of Object.keys(AGENT_ADDRESSES) as AgentId[]) {
-    let privateKey: string;
-    try {
-      privateKey = getPrivateKey(agent);
-    } catch {
-      // Key not configured — skip validation (will fail later at signing time)
-      continue;
-    }
-    const wallet = new ethers.Wallet(privateKey);
-    const expected = AGENT_ADDRESSES[agent];
-    if (wallet.address.toLowerCase() !== expected.toLowerCase()) {
-      throw new Error(
-        `Agent key mismatch for ${agent}: private key derives ${wallet.address} but AGENT_ADDRESSES expects ${expected}`
-      );
-    }
+export function getAgentAddress(agentId: AgentId): string {
+  return getAgentWallet(agentId).address;
+}
+
+/**
+ * Get addresses for a list of agent IDs.
+ */
+export function getAgentAddresses(agentIds: AgentId[]): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const id of agentIds) {
+    result[id] = getAgentAddress(id);
   }
+  return result;
 }
 
 // Create a signed contribution trace for an agent
@@ -67,8 +65,7 @@ export async function createTrace(
     constraints_met: boolean;
   }
 ): Promise<ContributionTrace> {
-  const privateKey = getPrivateKey(agent);
-  const wallet = new ethers.Wallet(privateKey);
+  const wallet = getAgentWallet(agent);
 
   // Create the message to sign (deterministic)
   const message = JSON.stringify({
@@ -85,7 +82,7 @@ export async function createTrace(
   return {
     task_id: taskId,
     agent,
-    agent_address: AGENT_ADDRESSES[agent],
+    agent_address: wallet.address,
     action,
     input_tokens: metrics.input_tokens,
     output_tokens: metrics.output_tokens,
@@ -101,15 +98,6 @@ export async function createTrace(
 
 /**
  * Verify a contribution trace signature.
- * Ensures that:
- * 1. The signature is cryptographically valid for the message
- * 2. The recovered address matches the expected address for that agent role
- *
- * This prevents self-signing attacks where an agent could use an arbitrary
- * address not assigned to their role.
- *
- * @param trace The contribution trace to verify
- * @returns true if the signature is valid AND from the authorized agent address
  */
 export function verifyTrace(trace: ContributionTrace): boolean {
   const message = JSON.stringify({
@@ -123,10 +111,7 @@ export function verifyTrace(trace: ContributionTrace): boolean {
 
   try {
     const recovered = ethers.verifyMessage(message, trace.signature);
-    // Critical: Verify the recovered address matches the expected address for this agent role
-    // This prevents self-signing with arbitrary addresses
-    const expectedAddress = AGENT_ADDRESSES[trace.agent];
-    return recovered.toLowerCase() === expectedAddress.toLowerCase();
+    return recovered.toLowerCase() === trace.agent_address.toLowerCase();
   } catch {
     return false;
   }

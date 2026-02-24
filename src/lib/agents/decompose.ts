@@ -1,25 +1,32 @@
 import { TaskDecomposition, LLMConfig } from "../types";
 import { chatCompletion } from "../llm";
 
-const SYSTEM_PROMPT = `You are a task decomposition agent. Given a user's task, break it into exactly 2 independent research subtasks and a synthesis instruction.
+const SYSTEM_PROMPT = `You are a task decomposition agent. Given a user's task, break it into independent research subtasks. Decide the optimal number of subtasks (2 to 5) based on task complexity.
 
 Respond in valid JSON only, no markdown, no explanation:
 {
-  "subtask_a": "First research subtask description (specific, actionable)",
-  "subtask_b": "Second research subtask description (specific, actionable)",
-  "synthesis_prompt": "Instruction for combining both research results into a final answer"
+  "subtasks": [
+    { "id": "worker_1", "description": "First research subtask (specific, actionable)" },
+    { "id": "worker_2", "description": "Second research subtask (specific, actionable)" }
+  ],
+  "synthesis_prompt": "Instruction for combining all research results into a final answer"
 }
 
 Rules:
-- subtask_a and subtask_b should cover different aspects of the task
-- Each subtask should be independently executable
-- The synthesis_prompt should explain how to combine both results
+- Use 2 subtasks for simple questions, 3-4 for moderate complexity, 5 for very complex multi-faceted tasks
+- Each subtask id must be "worker_1", "worker_2", "worker_3", etc.
+- Each subtask should cover a different aspect and be independently executable
+- The synthesis_prompt should explain how to combine all results
 - Use the same language as the user's input`;
 
 export async function decomposeTask(
   query: string,
   llmConfig?: LLMConfig
 ): Promise<TaskDecomposition> {
+  const hasUsableLlm =
+    !!llmConfig &&
+    (llmConfig.provider === "ollama" || !!llmConfig.apiKey?.trim());
+
   try {
     const result = await chatCompletion(
       llmConfig,
@@ -33,11 +40,27 @@ export async function decomposeTask(
     if (result) {
       const jsonMatch = result.content.match(/\{[\s\S]*\}/);
       if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]) as TaskDecomposition;
+        const parsed = JSON.parse(jsonMatch[0]);
+        if (
+          Array.isArray(parsed.subtasks) &&
+          parsed.subtasks.length >= 2 &&
+          parsed.synthesis_prompt
+        ) {
+          return parsed as TaskDecomposition;
+        }
       }
     }
   } catch (error) {
+    if (hasUsableLlm) {
+      throw new Error(
+        `Decompose failed with configured model: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    }
     console.warn("Decompose API failed, using mock:", error);
+  }
+
+  if (hasUsableLlm) {
+    throw new Error("Decompose returned invalid or empty structured output");
   }
 
   return mockDecompose(query);
@@ -47,8 +70,17 @@ function mockDecompose(query: string): TaskDecomposition {
   const topic = query.length > 20 ? query.slice(0, 20) + "..." : query;
 
   return {
-    subtask_a: `针对「${topic}」进行背景调研，收集相关的基础信息、关键概念和行业现状`,
-    subtask_b: `针对「${topic}」收集具体的数据、案例和实际方案，提供可操作的建议`,
-    synthesis_prompt: `将两个研究员的调研结果整合为一份结构化的完整报告，涵盖背景分析和具体方案`,
+    subtasks: [
+      {
+        id: "worker_1",
+        description: `Research the background, terminology, and current landscape for "${topic}".`,
+      },
+      {
+        id: "worker_2",
+        description: `Collect concrete data points, examples, and practical options for "${topic}".`,
+      },
+    ],
+    synthesis_prompt:
+      "Combine all worker findings into a structured final report with key insights, options, and clear recommendations.",
   };
 }

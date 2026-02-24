@@ -1,35 +1,80 @@
 "use client";
 
-import { useState } from "react";
-import { AgentId, ContributionTrace, ShapleyResult } from "@/lib/types";
+import { useState, useMemo } from "react";
+import {
+  ContributionTrace,
+  SettlementResult,
+  ShapleyResult,
+} from "@/lib/types";
 
 interface SplitResultProps {
   result: ShapleyResult;
   paymentUsdc: number;
   traces: ContributionTrace[];
+  settlement?: SettlementResult | null;
+  settlementPending?: boolean;
 }
 
-const AGENT_LABELS: Record<AgentId, string> = {
-  researcher_a: "Researcher A",
-  researcher_b: "Researcher B",
-  synthesizer: "Synthesizer",
-};
+// Dynamic color palette for agent bars
+const BAR_COLOR_PALETTE = [
+  "bg-accent",
+  "bg-accent/70",
+  "bg-accent/50",
+  "bg-accent/35",
+  "bg-accent/25",
+];
 
-const BAR_COLORS: Record<AgentId, string> = {
-  synthesizer: "bg-accent",
-  researcher_a: "bg-accent/70",
-  researcher_b: "bg-accent/50",
-};
+function getAgentLabel(agentId: string): string {
+  if (agentId === "synthesizer") return "Synthesizer";
+  const num = parseInt(agentId.replace("worker_", ""), 10);
+  if (!isNaN(num)) return `Worker ${num}`;
+  return agentId;
+}
+
+function getAgentShortLabel(agentId: string): string {
+  if (agentId === "synthesizer") return "S";
+  const num = parseInt(agentId.replace("worker_", ""), 10);
+  if (!isNaN(num)) return `W${num}`;
+  return agentId[0]?.toUpperCase() || "?";
+}
+
+function TxHashRow({ label, hash, explorerBaseUrl }: { label: string; hash: string; explorerBaseUrl: string }) {
+  const short = `${hash.slice(0, 10)}...${hash.slice(-8)}`;
+  return (
+    <div className="flex items-center justify-between rounded-md bg-muted/30 px-4 py-3">
+      <span className="text-sm text-muted-foreground">{label}</span>
+      <div className="flex items-center gap-2">
+        {explorerBaseUrl ? (
+          <a
+            href={`${explorerBaseUrl}/tx/${hash}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-mono text-xs text-accent transition-colors hover:underline"
+          >
+            {short}
+          </a>
+        ) : (
+          <span className="font-mono text-xs text-accent">{short}</span>
+        )}
+        <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
+      </div>
+    </div>
+  );
+}
 
 export default function SplitResult({
   result,
   paymentUsdc,
   traces,
+  settlement,
+  settlementPending,
 }: SplitResultProps) {
   const [showDerivation, setShowDerivation] = useState(false);
   const [showComparison, setShowComparison] = useState(false);
 
   const maxShare = Math.max(...result.agents.map((a) => a.share_percent));
+  const allAgentIds = useMemo(() => result.agents.map((a) => a.agent), [result]);
+  const agentCount = allAgentIds.length;
 
   return (
     <div>
@@ -58,12 +103,12 @@ export default function SplitResult({
         <div className="mt-8 space-y-6">
           {result.agents
             .sort((a, b) => b.shapley_value - a.shapley_value)
-            .map((agent) => (
+            .map((agent, i) => (
               <div key={agent.agent}>
                 <div className="mb-2 flex items-baseline justify-between">
                   <div>
                     <span className="font-serif text-lg">
-                      {AGENT_LABELS[agent.agent]}
+                      {getAgentLabel(agent.agent)}
                     </span>
                     <span className="ml-3 text-xs tracking-tight text-muted-foreground">
                       {agent.agent_address.slice(0, 6)}...
@@ -84,7 +129,7 @@ export default function SplitResult({
                 </div>
                 <div className="h-3 w-full overflow-hidden rounded-full bg-muted">
                   <div
-                    className={`h-full rounded-full transition-all duration-1000 ease-out ${BAR_COLORS[agent.agent]}`}
+                    className={`h-full rounded-full transition-all duration-1000 ease-out ${BAR_COLOR_PALETTE[i % BAR_COLOR_PALETTE.length]}`}
                     style={{
                       width: `${(agent.share_percent / maxShare) * 100}%`,
                     }}
@@ -101,7 +146,7 @@ export default function SplitResult({
             {result.total_value}):&nbsp;
             {result.agents.map((a) => (
               <span key={a.agent}>
-                {AGENT_LABELS[a.agent]}={a.shapley_value}&nbsp;&nbsp;
+                {getAgentLabel(a.agent)}={a.shapley_value}&nbsp;&nbsp;
               </span>
             ))}
           </p>
@@ -138,38 +183,28 @@ export default function SplitResult({
                     <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
                       V(S)
                     </th>
-                    <th className="px-3 py-2 text-left text-xs uppercase tracking-wide text-muted-foreground">
-                      Rationale
-                    </th>
                   </tr>
                 </thead>
                 <tbody className="text-foreground/80">
-                  {[
-                    ["{Researcher A}", "10", "Raw research data, unusable alone"],
-                    ["{Researcher B}", "10", "Raw research data, unusable alone"],
-                    ["{Synthesizer}", "15", "Framework only, no research data"],
-                    ["{Res.A, Synthesizer}", "55", "Partial report with one perspective"],
-                    ["{Res.B, Synthesizer}", "50", "Partial report with one perspective"],
-                    ["{Res.A, Res.B}", "25", "Data but no synthesis/organization"],
-                    ["{A, B, S}", "100", "Complete deliverable"],
-                  ].map(([subset, value, rationale]) => (
-                    <tr key={subset} className="border-b border-border/50">
-                      <td className="px-3 py-2">{subset}</td>
-                      <td className="px-3 py-2 text-right text-accent">
-                        {value}
-                      </td>
-                      <td className="px-3 py-2 text-xs text-muted-foreground">
-                        {rationale}
-                      </td>
-                    </tr>
-                  ))}
+                  {Object.entries(result.value_table)
+                    .sort((a, b) => a[0].split(",").length - b[0].split(",").length)
+                    .map(([subset, value]) => (
+                      <tr key={subset} className="border-b border-border/50">
+                        <td className="px-3 py-2">
+                          {"{" + subset.split(",").map(getAgentShortLabel).join(", ") + "}"}
+                        </td>
+                        <td className="px-3 py-2 text-right text-accent">
+                          {value}
+                        </td>
+                      </tr>
+                    ))}
                 </tbody>
               </table>
             </div>
 
             {/* Permutation table */}
             <p className="small-caps mb-3 text-accent">
-              All 3! = 6 Permutations
+              All {agentCount}! = {result.permutations.length} Permutations
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -178,57 +213,33 @@ export default function SplitResult({
                     <th className="px-3 py-2 text-left text-xs uppercase tracking-wide text-muted-foreground">
                       Order
                     </th>
-                    <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
-                      Res. A
-                    </th>
-                    <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
-                      Res. B
-                    </th>
-                    <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
-                      Synth.
-                    </th>
+                    {allAgentIds.map((id) => (
+                      <th key={id} className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
+                        {getAgentShortLabel(id)}
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody className="text-foreground/80">
                   {result.permutations.map((perm, i) => (
                     <tr key={i} className="border-b border-border/50">
                       <td className="px-3 py-2">
-                        {perm.order
-                          .map((a) =>
-                            a === "researcher_a"
-                              ? "A"
-                              : a === "researcher_b"
-                                ? "B"
-                                : "S"
-                          )
-                          .join(" → ")}
+                        {perm.order.map(getAgentShortLabel).join(" → ")}
                       </td>
-                      <td className="px-3 py-2 text-right">
-                        {perm.marginals.researcher_a}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        {perm.marginals.researcher_b}
-                      </td>
-                      <td className="px-3 py-2 text-right">
-                        {perm.marginals.synthesizer}
-                      </td>
+                      {allAgentIds.map((id) => (
+                        <td key={id} className="px-3 py-2 text-right">
+                          {perm.marginals[id] !== undefined
+                            ? Math.round(perm.marginals[id] * 100) / 100
+                            : "-"}
+                        </td>
+                      ))}
                     </tr>
                   ))}
                   <tr className="border-t-2 border-accent/30 font-semibold">
                     <td className="px-3 py-2 text-accent">Average</td>
-                    {(
-                      [
-                        "researcher_a",
-                        "researcher_b",
-                        "synthesizer",
-                      ] as AgentId[]
-                    ).map((agent) => (
-                      <td
-                        key={agent}
-                        className="px-3 py-2 text-right text-accent"
-                      >
-                        {result.agents.find((a) => a.agent === agent)
-                          ?.shapley_value}
+                    {allAgentIds.map((id) => (
+                      <td key={id} className="px-3 py-2 text-right text-accent">
+                        {result.agents.find((a) => a.agent === id)?.shapley_value}
                       </td>
                     ))}
                   </tr>
@@ -263,7 +274,7 @@ export default function SplitResult({
                       Agent
                     </th>
                     <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
-                      Equal Split (33%)
+                      Equal Split
                     </th>
                     <th className="px-3 py-2 text-right text-xs uppercase tracking-wide text-muted-foreground">
                       By Token Count
@@ -274,48 +285,31 @@ export default function SplitResult({
                   </tr>
                 </thead>
                 <tbody className="text-foreground/80">
-                  {[
-                    {
-                      agent: "Researcher A",
-                      id: "researcher_a",
-                      equal: 3.33,
-                      tokens: 3.5,
-                      tokenNote: "~350 tokens",
-                    },
-                    {
-                      agent: "Researcher B",
-                      id: "researcher_b",
-                      equal: 3.33,
-                      tokens: 3.5,
-                      tokenNote: "~350 tokens",
-                    },
-                    {
-                      agent: "Synthesizer",
-                      id: "synthesizer",
-                      equal: 3.33,
-                      tokens: 3.0,
-                      tokenNote: "~400 tokens",
-                    },
-                  ].map((row, i) => {
-                    const shapleyAgent = result.agents.find(
-                      (a) => a.agent === row.id
-                    );
+                  {result.agents.map((agent) => {
+                    const equalShare = Math.round((paymentUsdc / agentCount) * 100) / 100;
+                    const trace = traces.find((t) => t.agent === agent.agent);
+                    const totalTokens = traces.reduce((s, t) => s + t.output_tokens, 0);
+                    const tokenShare = trace && totalTokens > 0
+                      ? Math.round((trace.output_tokens / totalTokens) * paymentUsdc * 100) / 100
+                      : equalShare;
                     return (
-                      <tr key={i} className="border-b border-border/50">
+                      <tr key={agent.agent} className="border-b border-border/50">
                         <td className="px-3 py-2 font-serif">
-                          {row.agent}
+                          {getAgentLabel(agent.agent)}
                         </td>
                         <td className="px-3 py-2 text-right">
-                          {row.equal} USDC
+                          {equalShare} USDC
                         </td>
                         <td className="px-3 py-2 text-right">
-                          {row.tokens} USDC
-                          <span className="ml-1 text-[10px] text-muted-foreground">
-                            ({row.tokenNote})
-                          </span>
+                          {tokenShare} USDC
+                          {trace && (
+                            <span className="ml-1 text-[10px] text-muted-foreground">
+                              (~{trace.output_tokens} tokens)
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right font-semibold text-accent">
-                          {shapleyAgent?.payout_usdc} USDC
+                          {agent.payout_usdc} USDC
                         </td>
                       </tr>
                     );
@@ -346,7 +340,7 @@ export default function SplitResult({
             >
               <div>
                 <span className="font-serif">
-                  {AGENT_LABELS[trace.agent]}
+                  {getAgentLabel(trace.agent)}
                 </span>
                 <span className="ml-3 text-[11px] tracking-tight text-muted-foreground">
                   {trace.agent_address}
@@ -369,6 +363,53 @@ export default function SplitResult({
           agent signs their trace data with a unique ECDSA private key. Invalid
           signatures are rejected before Shapley calculation.
         </p>
+      </div>
+
+      {/* On-chain settlement */}
+      <div className="mt-6 rounded-lg border border-border bg-card p-6">
+        <p className="small-caps mb-4 text-accent">On-Chain Settlement</p>
+        {settlementPending && (
+          <div className="flex items-center gap-3 py-4">
+            <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+            <span className="text-sm text-muted-foreground">
+              Submitting split and settling on-chain&hellip;
+            </span>
+          </div>
+        )}
+        {settlement && (
+          <div className="space-y-3">
+            {settlement.createTxHash && (
+              <TxHashRow
+                label="Create Task"
+                hash={settlement.createTxHash}
+                explorerBaseUrl={settlement.explorerBaseUrl}
+              />
+            )}
+            <TxHashRow
+              label="Submit Split"
+              hash={settlement.splitTxHash}
+              explorerBaseUrl={settlement.explorerBaseUrl}
+            />
+            <TxHashRow
+              label="Settle"
+              hash={settlement.settleTxHash}
+              explorerBaseUrl={settlement.explorerBaseUrl}
+            />
+            <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground/60">
+              Shapley split ratios submitted by Oracle and funds distributed
+              via SplitVault smart contract.
+              {settlement.explorerBaseUrl
+                ? " View transactions on Base Sepolia explorer."
+                : " Running on local Hardhat node."}
+            </p>
+          </div>
+        )}
+        {!settlementPending && !settlement && (
+          <p className="text-sm text-muted-foreground/60">
+            Off-chain only &mdash; no smart contract configured. Start a local
+            Hardhat node and deploy to enable on-chain settlement.
+          </p>
+        )}
       </div>
     </div>
   );

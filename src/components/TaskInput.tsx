@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { LLMConfig } from "@/lib/types";
+import { ModelProfile } from "@/lib/types";
 import { PROVIDER_LABELS } from "@/lib/llm";
 
 interface TaskInputProps {
   onSubmit: (query: string, payment: number) => void;
-  llmConfig: LLMConfig | null;
+  hasModel: boolean;
+  defaultProfile: ModelProfile | null;
 }
 
 const EXAMPLE_PROMPTS = [
@@ -16,7 +17,7 @@ const EXAMPLE_PROMPTS = [
   { label: "学习计划", text: "制定一个 30 天的 Rust 编程语言学习计划，我有 Python 基础" },
 ];
 
-export default function TaskInput({ onSubmit, llmConfig }: TaskInputProps) {
+export default function TaskInput({ onSubmit, hasModel, defaultProfile }: TaskInputProps) {
   const [query, setQuery] = useState("");
   const [payment, setPayment] = useState(10);
 
@@ -81,39 +82,26 @@ export default function TaskInput({ onSubmit, llmConfig }: TaskInputProps) {
           </p>
         </div>
 
-        {/* Agent roster */}
+        {/* Dynamic agent info */}
         <div className="mb-10 rounded-lg border border-border bg-card p-6">
-          <p className="small-caps mb-4 text-accent">Participating Agents</p>
-          <div className="grid grid-cols-3 gap-4">
-            {[
-              {
-                name: "Researcher A",
-                role: "Data Collector",
-                desc: "Investigates background & key information",
-              },
-              {
-                name: "Researcher B",
-                role: "Data Collector",
-                desc: "Gathers data, cases & solutions",
-              },
-              {
-                name: "Synthesizer",
-                role: "Coordinator",
-                desc: "Combines research into final report",
-              },
-            ].map((agent) => (
-              <div
-                key={agent.name}
-                className="rounded-md border border-border p-4 transition-colors duration-200 hover:border-border-hover"
+          <p className="small-caps mb-3 text-accent">Agent Collaboration</p>
+          <p className="text-sm text-muted-foreground">
+            Agents are assigned dynamically based on task complexity. The AI task planner will decompose your task into
+            <span className="font-semibold text-foreground"> 2-5 research subtasks</span>, each handled by a dedicated worker agent, plus a
+            <span className="font-semibold text-foreground"> Synthesizer</span> that combines all findings into a final report.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {["Worker 1", "Worker 2", "Worker N...", "Synthesizer"].map((label) => (
+              <span
+                key={label}
+                className={`rounded-md border px-3 py-1.5 text-xs ${
+                  label === "Synthesizer"
+                    ? "border-accent/30 bg-accent/5 text-accent font-medium"
+                    : "border-border text-muted-foreground"
+                }`}
               >
-                <p className="font-serif text-lg">{agent.name}</p>
-                <p className="text-xs font-semibold uppercase tracking-wide text-accent">
-                  {agent.role}
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {agent.desc}
-                </p>
-              </div>
+                {label}
+              </span>
             ))}
           </div>
         </div>
@@ -122,12 +110,12 @@ export default function TaskInput({ onSubmit, llmConfig }: TaskInputProps) {
         <div className="mb-2 flex items-center justify-center gap-2 text-xs text-muted-foreground">
           <span
             className={`inline-block h-1.5 w-1.5 rounded-full ${
-              llmConfig ? "bg-green-500" : "bg-amber-400"
+              hasModel ? "bg-green-500" : "bg-amber-400"
             }`}
           />
-          {llmConfig
-            ? `${PROVIDER_LABELS[llmConfig.provider]} · ${llmConfig.model || "default"}`
-            : "Mock Mode — configure LLM in settings ⚙"}
+          {defaultProfile
+            ? `${PROVIDER_LABELS[defaultProfile.provider]} · ${defaultProfile.model || "default"}`
+            : "Mock Mode — configure LLM in settings"}
         </div>
         <button
           type="submit"

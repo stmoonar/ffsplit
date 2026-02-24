@@ -7,11 +7,15 @@ interface SynthesizerResult {
   trace: ContributionTrace;
 }
 
+function hasUsableLlm(config?: LLMConfig): boolean {
+  return !!config && (config.provider === "ollama" || !!config.apiKey?.trim());
+}
+
 export async function* streamSynthesizer(
   taskId: string,
   query: string,
   synthesisPrompt: string,
-  workerOutputs: { researcher_a: string; researcher_b: string },
+  workerOutputs: Record<string, string>,
   llmConfig?: LLMConfig
 ): AsyncGenerator<string, SynthesizerResult> {
   const startTime = Date.now();
@@ -19,6 +23,11 @@ export async function* streamSynthesizer(
   let inputTokens = 0;
   let outputTokens = 0;
   let usedMock = false;
+  const useRealLlm = hasUsableLlm(llmConfig);
+
+  const workerSection = Object.entries(workerOutputs)
+    .map(([id, content]) => `--- ${id.replace("_", " ")} findings ---\n${content}`)
+    .join("\n\n");
 
   try {
     const stream = chatCompletionStream(
@@ -26,7 +35,7 @@ export async function* streamSynthesizer(
       [
         {
           role: "system",
-          content: `You are a synthesis agent. Your job is to combine research from two agents into a coherent, actionable final report. Use the same language as the user's query. Format with markdown headers and bullet points. Keep under 500 words.`,
+          content: `You are a synthesis agent. Your job is to combine research from ${Object.keys(workerOutputs).length} agents into a coherent, actionable final report. Use the same language as the user's query. Format with markdown headers and bullet points. Keep under 500 words.`,
         },
         {
           role: "user",
@@ -34,11 +43,7 @@ export async function* streamSynthesizer(
 
 Synthesis instruction: ${synthesisPrompt}
 
---- Researcher A's findings ---
-${workerOutputs.researcher_a}
-
---- Researcher B's findings ---
-${workerOutputs.researcher_b}
+${workerSection}
 
 Please synthesize these into a comprehensive final report.`,
         },
@@ -65,13 +70,22 @@ Please synthesize these into a comprehensive final report.`,
       usedMock = true;
     }
   } catch (error) {
+    if (useRealLlm) {
+      throw new Error(
+        `Synthesizer failed with configured model: ${error instanceof Error ? error.message : "Unknown error"}`
+      );
+    }
     console.warn("Synthesizer API failed, falling back to mock:", error);
     usedMock = true;
   }
 
   if (usedMock) {
+    if (useRealLlm) {
+      throw new Error("Synthesizer returned an empty response");
+    }
+
     fullContent = "";
-    const mockResponse = generateMockSynthesis(query);
+    const mockResponse = generateMockSynthesis(query, Object.keys(workerOutputs).length);
     const chars = mockResponse.split("");
     for (let i = 0; i < chars.length; i++) {
       fullContent += chars[i];
@@ -102,51 +116,30 @@ Please synthesize these into a comprehensive final report.`,
   return { content: fullContent, trace };
 }
 
-function generateMockSynthesis(query: string): string {
-  const topic =
-    query.length > 30 ? query.slice(0, 30) + "..." : query;
+function generateMockSynthesis(query: string, workerCount: number): string {
+  const topic = query.length > 30 ? query.slice(0, 30) + "..." : query;
 
-  return `## 综合分析报告
+  return `## Final Synthesis Report
 
-### 关于「${topic}」
+### Task
+${topic}
 
-基于两位研究员的调研结果，以下是综合分析与建议。
+### Integrated Findings
 
----
+- ${workerCount} worker outputs were merged into a single recommendation
+- Common signals were identified and conflicting points were reconciled
+- The final plan balances execution speed, cost, and quality
 
-### 一、背景总结
+### Suggested Plan
 
-根据 Researcher A 的调研：
-- 该领域正处于快速发展期，市场潜力巨大
-- 核心趋势包括技术创新驱动、需求多样化和成本优化
-- 合理规划可显著提升效率
+1. Start with a narrow pilot to validate assumptions quickly
+2. Measure outcome quality and resource usage with clear metrics
+3. Expand in stages only after early targets are met
 
-### 二、方案建议
+### Risk Controls
 
-综合 Researcher B 的方案分析，我们推荐**分阶段实施策略**：
-
-**第一阶段 — 快速启动**
-- 采用基础方案验证可行性
-- 预计投入：总预算的 40%
-- 预期 ROI：1.5 倍
-
-**第二阶段 — 深度优化**
-- 在验证基础上升级为进阶方案
-- 重点关注满意度和效果指标
-- 预期 ROI 提升至 2.0 倍
-
-**第三阶段 — 全面升级**（可选）
-- 根据实际效果决定是否升级至最优方案
-- 最高可达 95% 满意度和 2.8 倍 ROI
-
-### 三、关键建议
-
-1. **优先级排序**: 先解决核心需求，再扩展附加功能
-2. **资源分配**: 建议 60% 资源投入核心环节，40% 用于优化
-3. **风险控制**: 设置明确的阶段性里程碑，及时评估调整
-4. **时间规划**: 预计总周期 4-8 周，关键节点提前预警
-
-### 四、总结
-
-> 综合两位研究员的分析，推荐采用渐进式策略。通过分阶段实施，既控制了风险，又保留了向上优化的空间。核心原则是：**小步快跑，数据驱动，持续优化**。`;
+- Define milestone-based go/no-go checkpoints
+- Keep contingency budget for uncertainty
+- Re-prioritize based on observed ROI
+`;
 }

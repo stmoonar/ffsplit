@@ -8,13 +8,28 @@ export interface LLMConfig {
   baseUrl?: string;
 }
 
-// Agent identifiers
-export type AgentId = "researcher_a" | "researcher_b" | "synthesizer";
+// Model profile: a saved, reusable LLM configuration
+export interface ModelProfile {
+  id: string;
+  name: string;
+  provider: LLMProvider;
+  apiKey: string;
+  model?: string;
+  baseUrl?: string;
+}
 
-// Task decomposition result
+// Agent identifiers — now dynamic strings (e.g. "worker_1", "worker_2", "synthesizer")
+export type AgentId = string;
+
+// Per-agent LLM configuration (keyed by dynamic agent ID)
+export type AgentLLMConfigs = Record<string, LLMConfig>;
+
+// Agent-to-profile assignment (agent_id → profile_id)
+export type AgentModelAssignment = Record<string, string>;
+
+// Task decomposition result — dynamic subtask count
 export interface TaskDecomposition {
-  subtask_a: string;
-  subtask_b: string;
+  subtasks: { id: string; description: string }[];
   synthesis_prompt: string;
 }
 
@@ -68,6 +83,7 @@ export interface ShapleyResult {
   total_value: number;
   agents: AgentShapleyValue[];
   permutations: PermutationDetail[];
+  value_table: ValueTable;
 }
 
 export interface AgentShapleyValue {

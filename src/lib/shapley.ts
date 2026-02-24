@@ -1,41 +1,98 @@
 import {
   AgentId,
   AgentShapleyValue,
+  ContributionTrace,
   PermutationDetail,
   ShapleyResult,
   SubsetKey,
   ValueTable,
 } from "./types";
-
-// Value table for generic 3-agent collaboration
-// V(S) represents the value a subset S of agents can produce
-const VALUE_TABLE: ValueTable = {
-  researcher_a: 10,
-  researcher_b: 10,
-  synthesizer: 15,
-  "researcher_a,synthesizer": 55,
-  "researcher_b,synthesizer": 50,
-  "researcher_a,researcher_b": 25,
-  "researcher_a,researcher_b,synthesizer": 100,
-};
-
-const ALL_AGENTS: AgentId[] = ["researcher_a", "researcher_b", "synthesizer"];
-
-// Agent wallet addresses (test addresses)
-export const AGENT_ADDRESSES: Record<AgentId, string> = {
-  researcher_a: "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC",
-  researcher_b: "0x90F79bf6EB2c4f870365E785982E1f101E93b906",
-  synthesizer: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-};
+import { getAgentAddress } from "./trace";
 
 function subsetKey(agents: AgentId[]): SubsetKey {
   return [...agents].sort().join(",");
 }
 
-function V(agents: AgentId[]): number {
-  if (agents.length === 0) return 0;
-  const key = subsetKey(agents);
-  return VALUE_TABLE[key] ?? 0;
+// Compute a raw score for an individual agent from their trace metrics
+function agentScore(trace: ContributionTrace): number {
+  return (
+    trace.entities_returned * 3 +
+    (trace.constraints_met ? 5 : 0) +
+    trace.output_tokens * 0.01
+  );
+}
+
+// Build a dynamic V(S) value table from actual contribution traces (N agents)
+function buildValueTable(traces: ContributionTrace[]): ValueTable {
+  const traceMap = new Map<string, ContributionTrace>();
+  for (const t of traces) {
+    traceMap.set(t.agent, t);
+  }
+
+  const allAgents = traces.map((t) => t.agent);
+  const scores = new Map<string, number>();
+  for (const agent of allAgents) {
+    const trace = traceMap.get(agent)!;
+    scores.set(agent, agentScore(trace));
+  }
+
+  // Identify synthesizer (last agent, conventionally "synthesizer")
+  const synthId = allAgents.find((a) => a === "synthesizer") || allAgents[allAgents.length - 1];
+  const synthTrace = traceMap.get(synthId);
+  const synthAdopted = synthTrace?.entities_adopted ?? 0;
+  const isSynth = (a: string) => a === synthId;
+
+  // Generate all subsets
+  const raw: ValueTable = {};
+  const subsets = getAllSubsets(allAgents);
+
+  for (const subset of subsets) {
+    if (subset.length === 0) continue;
+
+    const sumScores = subset.reduce((s, a) => s + (scores.get(a) || 0), 0);
+    const hasSynth = subset.some(isSynth);
+    const workerCount = subset.filter((a) => !isSynth(a)).length;
+
+    let value: number;
+    if (subset.length === 1) {
+      // Singleton: raw score
+      value = sumScores;
+    } else if (!hasSynth) {
+      // Workers only: mild collaboration bonus (1.2x)
+      value = sumScores * 1.2;
+    } else {
+      // With synthesizer: strong synergy (2.0x + adoption bonus scaled by worker count)
+      value = sumScores * 2.0 + synthAdopted * 2 * (workerCount / Math.max(allAgents.length - 1, 1));
+    }
+
+    raw[subsetKey(subset)] = value;
+  }
+
+  // Normalize so V(all) = 100
+  const fullKey = subsetKey(allAgents);
+  const rawFull = raw[fullKey] || 1;
+  const scale = 100 / rawFull;
+
+  const table: ValueTable = {};
+  for (const key of Object.keys(raw)) {
+    table[key] = Math.round(raw[key] * scale * 100) / 100;
+  }
+
+  return table;
+}
+
+// Generate all non-empty subsets of an array
+function getAllSubsets<T>(arr: T[]): T[][] {
+  const result: T[][] = [];
+  const n = arr.length;
+  for (let mask = 1; mask < (1 << n); mask++) {
+    const subset: T[] = [];
+    for (let i = 0; i < n; i++) {
+      if (mask & (1 << i)) subset.push(arr[i]);
+    }
+    result.push(subset);
+  }
+  return result;
 }
 
 // Generate all permutations of an array
@@ -51,17 +108,26 @@ function permutations<T>(arr: T[]): T[][] {
   return result;
 }
 
-// Calculate Shapley Values by exhaustive enumeration
+// Calculate Shapley Values by exhaustive enumeration (works for any N agents)
 export function calculateShapley(
   taskId: string,
-  paymentUsdc: number
+  paymentUsdc: number,
+  traces: ContributionTrace[]
 ): ShapleyResult {
-  const allPerms = permutations(ALL_AGENTS);
-  const marginalSums: Record<AgentId, number> = {
-    researcher_a: 0,
-    researcher_b: 0,
-    synthesizer: 0,
-  };
+  const allAgents = traces.map((t) => t.agent);
+  const valueTable = buildValueTable(traces);
+
+  function V(agents: AgentId[]): number {
+    if (agents.length === 0) return 0;
+    const key = subsetKey(agents);
+    return valueTable[key] ?? 0;
+  }
+
+  const allPerms = permutations(allAgents);
+  const marginalSums: Record<string, number> = {};
+  for (const agent of allAgents) {
+    marginalSums[agent] = 0;
+  }
   const permDetails: PermutationDetail[] = [];
 
   for (const perm of allPerms) {
@@ -80,19 +146,19 @@ export function calculateShapley(
 
     permDetails.push({
       order: perm,
-      marginals: marginals as Record<AgentId, number>,
+      marginals,
     });
   }
 
   const n = allPerms.length;
-  const totalValue = V(ALL_AGENTS);
+  const totalValue = V(allAgents);
 
-  const agents: AgentShapleyValue[] = ALL_AGENTS.map((agent) => {
+  const agents: AgentShapleyValue[] = allAgents.map((agent) => {
     const shapleyValue = marginalSums[agent] / n;
-    const sharePercent = (shapleyValue / totalValue) * 100;
+    const sharePercent = totalValue > 0 ? (shapleyValue / totalValue) * 100 : 0;
     return {
       agent,
-      agent_address: AGENT_ADDRESSES[agent],
+      agent_address: getAgentAddress(agent),
       shapley_value: Math.round(shapleyValue * 100) / 100,
       share_percent: Math.round(sharePercent * 100) / 100,
       payout_usdc:
@@ -105,5 +171,6 @@ export function calculateShapley(
     total_value: totalValue,
     agents,
     permutations: permDetails,
+    value_table: valueTable,
   };
 }

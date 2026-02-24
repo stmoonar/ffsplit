@@ -3,36 +3,76 @@ import { decomposeTask } from "@/lib/agents/decompose";
 import { runWorkerAgent } from "@/lib/agents/worker";
 import { streamSynthesizer } from "@/lib/agents/synthesizer";
 import { calculateShapley } from "@/lib/shapley";
-import { verifyTrace, validateAgentKeys } from "@/lib/trace";
-import { SSEEvent, ContributionTrace, LLMConfig } from "@/lib/types";
-
-// Fail-fast: validate agent private keys match expected addresses on module load
-try {
-  validateAgentKeys();
-} catch (error) {
-  console.error("FATAL: Agent key validation failed:", error);
-  // In development, log the error but don't crash the module
-  if (process.env.NODE_ENV !== "development") {
-    throw error;
-  }
-}
+import { verifyTrace, getAgentAddress } from "@/lib/trace";
+import { SSEEvent, ContributionTrace, LLMConfig, ModelProfile } from "@/lib/types";
+import { isContractConfigured, submitSplitAndSettle } from "@/lib/contracts/vault";
 
 function sseEncode(event: SSEEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
 export async function POST(request: NextRequest) {
-  const { query, payment_usdc, llm_config } = await request.json();
+  const {
+    query,
+    payment_usdc,
+    model_profiles,
+    default_profile_id,
+    agent_assignments,
+    llm_config,
+    agent_llm_configs,
+  } = await request.json();
+
   const taskId = `task-${Date.now().toString(36)}`;
 
-  // Resolve LLM config: prefer user-provided, fallback to env var
-  let resolvedConfig: LLMConfig | undefined = llm_config;
-  if (!resolvedConfig?.apiKey && process.env.KIMI_API_KEY) {
-    resolvedConfig = {
-      provider: "kimi",
-      apiKey: process.env.KIMI_API_KEY,
-    };
+  const profileMap = new Map<string, ModelProfile>();
+  if (Array.isArray(model_profiles)) {
+    for (const p of model_profiles) {
+      profileMap.set(p.id, p);
+    }
   }
+
+  const isUsableConfig = (cfg?: LLMConfig): cfg is LLMConfig => {
+    if (!cfg) return false;
+    if (cfg.provider === "ollama") return true;
+    return !!cfg.apiKey?.trim();
+  };
+
+  const profileToConfig = (profile: ModelProfile): LLMConfig => ({
+    provider: profile.provider,
+    apiKey: profile.apiKey,
+    model: profile.model,
+    baseUrl: profile.baseUrl,
+  });
+
+  const resolveConfig = (agentId: string): LLMConfig | undefined => {
+    if (agent_assignments?.[agentId]) {
+      const profile = profileMap.get(agent_assignments[agentId]);
+      if (profile) {
+        const cfg = profileToConfig(profile);
+        if (isUsableConfig(cfg)) return cfg;
+      }
+    }
+
+    if (agent_llm_configs?.[agentId] && isUsableConfig(agent_llm_configs[agentId])) {
+      return agent_llm_configs[agentId];
+    }
+
+    if (default_profile_id) {
+      const profile = profileMap.get(default_profile_id);
+      if (profile) {
+        const cfg = profileToConfig(profile);
+        if (isUsableConfig(cfg)) return cfg;
+      }
+    }
+
+    if (isUsableConfig(llm_config)) return llm_config;
+
+    if (process.env.KIMI_API_KEY) {
+      return { provider: "kimi" as const, apiKey: process.env.KIMI_API_KEY };
+    }
+
+    return undefined;
+  };
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -44,93 +84,54 @@ export async function POST(request: NextRequest) {
       try {
         const traces: ContributionTrace[] = [];
 
-        // --- Phase 0: Decompose task ---
-        const decomposition = await decomposeTask(query, resolvedConfig);
+        const decomposition = await decomposeTask(query, resolveConfig("decomposer"));
         send({ type: "task_decomposed", decomposition });
 
-        // --- Phase 1: Run Researcher A and B in parallel ---
-        send({
-          type: "agent_start",
-          agent: "researcher_a",
-          action: "research",
-        });
-        send({
-          type: "agent_start",
-          agent: "researcher_b",
-          action: "research",
-        });
+        const workerIds = decomposition.subtasks.map((s) => s.id);
 
-        const [resultA, resultB] = await Promise.all([
-          runWorkerAgent(
-            taskId,
-            "researcher_a",
-            decomposition.subtask_a,
-            query,
-            resolvedConfig
-          ),
-          runWorkerAgent(
-            taskId,
-            "researcher_b",
-            decomposition.subtask_b,
-            query,
-            resolvedConfig
-          ),
-        ]);
-
-        // Stream researcher A results
-        const linesA = resultA.content.split("\n");
-        for (const line of linesA) {
-          send({
-            type: "agent_chunk",
-            agent: "researcher_a",
-            content: line + "\n",
-          });
-          await new Promise((r) => setTimeout(r, 100));
+        for (const wId of workerIds) {
+          send({ type: "agent_start", agent: wId, action: "research" });
         }
-        send({
-          type: "agent_done",
-          agent: "researcher_a",
-          trace: resultA.trace,
-        });
-        traces.push(resultA.trace);
 
-        // Stream researcher B results
-        const linesB = resultB.content.split("\n");
-        for (const line of linesB) {
-          send({
-            type: "agent_chunk",
-            agent: "researcher_b",
-            content: line + "\n",
-          });
-          await new Promise((r) => setTimeout(r, 100));
+        const workerResults = await Promise.all(
+          decomposition.subtasks.map((subtask) =>
+            runWorkerAgent(
+              taskId,
+              subtask.id,
+              subtask.description,
+              query,
+              resolveConfig(subtask.id)
+            )
+          )
+        );
+
+        for (let i = 0; i < workerResults.length; i++) {
+          const result = workerResults[i];
+          const wId = workerIds[i];
+          const lines = result.content.split("\n");
+          for (const line of lines) {
+            send({ type: "agent_chunk", agent: wId, content: line + "\n" });
+            await new Promise((r) => setTimeout(r, 80));
+          }
+          send({ type: "agent_done", agent: wId, trace: result.trace });
+          traces.push(result.trace);
         }
-        send({
-          type: "agent_done",
-          agent: "researcher_b",
-          trace: resultB.trace,
-        });
-        traces.push(resultB.trace);
 
-        // --- Phase 2: Run Synthesizer (streams) ---
-        send({
-          type: "agent_start",
-          agent: "synthesizer",
-          action: "synthesize",
-        });
+        send({ type: "agent_start", agent: "synthesizer", action: "synthesize" });
+
+        const workerOutputs: Record<string, string> = {};
+        for (let i = 0; i < workerResults.length; i++) {
+          workerOutputs[workerIds[i]] = workerResults[i].content;
+        }
 
         const synthGen = streamSynthesizer(
           taskId,
           query,
           decomposition.synthesis_prompt,
-          {
-            researcher_a: resultA.content,
-            researcher_b: resultB.content,
-          },
-          resolvedConfig
+          workerOutputs,
+          resolveConfig("synthesizer")
         );
-        let synthResult:
-          | { content: string; trace: ContributionTrace }
-          | undefined;
+        let synthResult: { content: string; trace: ContributionTrace } | undefined;
 
         while (true) {
           const { done, value } = await synthGen.next();
@@ -142,29 +143,67 @@ export async function POST(request: NextRequest) {
         }
 
         if (synthResult) {
-          send({
-            type: "agent_done",
-            agent: "synthesizer",
-            trace: synthResult.trace,
-          });
+          send({ type: "agent_done", agent: "synthesizer", trace: synthResult.trace });
           traces.push(synthResult.trace);
         }
 
-        // --- Phase 3: Verify traces and calculate Shapley ---
         for (const trace of traces) {
           const valid = verifyTrace(trace);
           if (!valid) {
-            send({
-              type: "error",
-              message: `Invalid signature for agent ${trace.agent}`,
-            });
+            send({ type: "error", message: `Invalid signature for agent ${trace.agent}` });
             controller.close();
             return;
           }
         }
 
-        const shapleyResult = calculateShapley(taskId, payment_usdc || 10);
+        const shapleyResult = calculateShapley(taskId, payment_usdc || 10, traces);
         send({ type: "shapley_result", result: shapleyResult });
+
+        if (isContractConfigured()) {
+          send({ type: "settlement_start" });
+          try {
+            const agents = shapleyResult.agents.map((a) => getAgentAddress(a.agent));
+            const sharesBasisPoints = shapleyResult.agents.map((a) =>
+              Math.round(a.share_percent * 100)
+            );
+
+            const bpSum = sharesBasisPoints.reduce((s, v) => s + v, 0);
+            if (bpSum !== 10000) {
+              sharesBasisPoints[0] += 10000 - bpSum;
+            }
+
+            const paymentWei = BigInt(Math.floor((payment_usdc || 10) * 1e15));
+
+            const settlement = await submitSplitAndSettle(
+              taskId,
+              agents,
+              sharesBasisPoints,
+              paymentWei
+            );
+
+            const explorerBaseUrl =
+              process.env.BASE_SEPOLIA_RPC?.includes("127.0.0.1") ||
+              process.env.NODE_ENV === "development"
+                ? ""
+                : "https://sepolia.basescan.org";
+
+            send({
+              type: "settlement_result",
+              result: {
+                splitTxHash: settlement.splitTxHash,
+                settleTxHash: settlement.settleTxHash,
+                createTxHash: settlement.createTxHash,
+                explorerBaseUrl,
+              },
+            });
+          } catch (error) {
+            console.error("Settlement failed:", error);
+            send({
+              type: "error",
+              message: `On-chain settlement failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+            });
+          }
+        }
 
         send({ type: "task_complete", task_id: taskId });
       } catch (error) {
