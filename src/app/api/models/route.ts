@@ -26,6 +26,8 @@ const BASE_URLS: Record<string, string> = {
     qwen: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     grok: "https://api.x.ai/v1",
     ollama: "http://localhost:11434/v1",
+    glm: "https://open.bigmodel.cn/api/paas/v4",
+    siliconflow: "https://api.siliconflow.cn/v1",
 };
 
 // SSRF Protection: Only allow known provider domains or localhost for ollama
@@ -44,7 +46,9 @@ function validateBaseUrl(baseUrl: string, provider: string): boolean {
             gemini: ["generativelanguage.googleapis.com"],
             qwen: ["dashscope.aliyuncs.com"],
             grok: ["api.x.ai"],
-            ollama: ["localhost", "127.0.0.1", "::1"], // Localhost only for ollama
+            ollama: ["localhost", "127.0.0.1", "::1"],
+            glm: ["open.bigmodel.cn"],
+            siliconflow: ["api.siliconflow.cn"],
         };
 
         const allowedForProvider = allowedDomains[provider];

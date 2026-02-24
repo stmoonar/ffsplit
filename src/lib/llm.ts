@@ -80,6 +80,8 @@ const PROVIDER_DEFAULTS: Record<
   qwen: { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-plus" },
   grok: { baseUrl: "https://api.x.ai/v1", model: "grok-3-mini" },
   ollama: { baseUrl: "http://localhost:11434/v1", model: "llama3.3" },
+  glm: { baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4-plus" },
+  siliconflow: { baseUrl: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3" },
 };
 
 export const PROVIDER_LABELS: Record<LLMProvider, string> = {
@@ -91,6 +93,8 @@ export const PROVIDER_LABELS: Record<LLMProvider, string> = {
   qwen: "Alibaba",
   grok: "xAI",
   ollama: "Ollama",
+  glm: "GLM",
+  siliconflow: "SiliconFlow",
 };
 
 /** Fallback model lists — used when the provider's /models API is unavailable
@@ -104,6 +108,8 @@ export const FALLBACK_MODELS: Record<LLMProvider, string[]> = {
   qwen: ["qwen3.5-plus", "qwen3-max", "qwen-plus", "qwen-flash", "qwen3-vl-plus"],
   grok: ["grok-4", "grok-3", "grok-3-mini"],
   ollama: ["llama3.3", "deepseek-r1:7b", "qwen2.5:7b", "phi4:14b"],
+  glm: ["glm-4-plus", "glm-4-flash", "glm-4-long", "glm-4v-plus"],
+  siliconflow: ["deepseek-ai/DeepSeek-V3", "deepseek-ai/DeepSeek-R1", "Qwen/Qwen2.5-72B-Instruct", "THUDM/GLM-4-9B-Chat"],
 };
 
 function getBaseUrl(config: LLMConfig): string {
