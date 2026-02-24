@@ -195,8 +195,8 @@ function ProfileEditor({
                   type="button"
                   onClick={() => handleProviderChange(p)}
                   className={`group relative rounded-lg border px-2 py-2 text-center transition-all duration-200 ${profile.provider === p
-                      ? "border-accent bg-accent/5 shadow-sm"
-                      : "border-border hover:border-border-hover"
+                    ? "border-accent bg-accent/5 shadow-sm"
+                    : "border-border hover:border-border-hover"
                     }`}
                 >
                   <span className={`mx-auto flex h-5 w-5 items-center justify-center transition-colors ${profile.provider === p ? "text-accent" : "text-muted-foreground/60 group-hover:text-muted-foreground"
@@ -258,19 +258,37 @@ function ProfileEditor({
               className="h-9 w-full rounded-lg border border-border bg-transparent px-3 text-xs text-foreground transition-colors placeholder:text-muted-foreground/40 hover:border-border-hover focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20"
             />
             <div className="mt-2 flex flex-wrap gap-1">
-              {displayModels.slice(0, 6).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  onClick={() => onChange({ ...profile, model: m })}
-                  className={`rounded-md border px-2 py-0.5 text-[10px] transition-colors ${profile.model === m
-                      ? "border-accent bg-accent/10 text-accent font-medium"
-                      : "border-border text-muted-foreground hover:border-border-hover hover:text-foreground"
-                    }`}
-                >
-                  {m}
-                </button>
-              ))}
+              {(() => {
+                const query = (profile.model || "").trim().toLowerCase();
+                const filtered = query
+                  ? displayModels.filter((m) => m.toLowerCase().includes(query))
+                  : displayModels;
+                const shown = query ? filtered.slice(0, 12) : filtered.slice(0, 6);
+                const remaining = filtered.length - shown.length;
+                return (
+                  <>
+                    {shown.map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        onClick={() => onChange({ ...profile, model: m })}
+                        className={`rounded-md border px-2 py-0.5 text-[10px] transition-colors ${profile.model === m
+                          ? "border-accent bg-accent/10 text-accent font-medium"
+                          : "border-border text-muted-foreground hover:border-border-hover hover:text-foreground"
+                          }`}
+                      >
+                        {m}
+                      </button>
+                    ))}
+                    {query && shown.length === 0 && (
+                      <span className="text-[10px] text-muted-foreground/50 py-0.5">No matching models</span>
+                    )}
+                    {remaining > 0 && (
+                      <span className="text-[10px] text-muted-foreground/40 py-0.5">+{remaining} more</span>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
 
@@ -452,8 +470,8 @@ export default function Settings({
                 type="button"
                 onClick={() => setActiveSection("profiles")}
                 className={`px-3 py-2.5 text-xs font-semibold tracking-wide transition-colors duration-200 border-b-2 ${activeSection === "profiles"
-                    ? "border-accent text-accent"
-                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border-hover"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-border-hover"
                   }`}
               >
                 Model Profiles
@@ -465,8 +483,8 @@ export default function Settings({
                 type="button"
                 onClick={() => setActiveSection("assignments")}
                 className={`px-3 py-2.5 text-xs font-semibold tracking-wide transition-colors duration-200 border-b-2 ${activeSection === "assignments"
-                    ? "border-accent text-accent"
-                    : "border-transparent text-muted-foreground hover:text-foreground hover:border-border-hover"
+                  ? "border-accent text-accent"
+                  : "border-transparent text-muted-foreground hover:text-foreground hover:border-border-hover"
                   }`}
               >
                 Agent Assignments
