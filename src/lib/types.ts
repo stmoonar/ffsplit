@@ -113,3 +113,16 @@ export interface TaskState {
   shapley_result?: ShapleyResult;
   agent_outputs: Record<AgentId, string>;
 }
+
+// History record for persisting completed tasks
+export interface HistoryRecord {
+  id: string;
+  query: string;
+  payment_usdc: number;
+  timestamp: number;
+  decomposition: TaskDecomposition | null;
+  agentOutputs: Record<string, string>;
+  traces: ContributionTrace[];
+  shapleyResult: ShapleyResult;
+  settlementResult: SettlementResult | null;
+}

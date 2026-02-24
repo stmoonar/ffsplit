@@ -10,6 +10,54 @@ interface ChatOptions {
   stream?: boolean;
 }
 
+function isKimiK25Model(config: LLMConfig, model: string): boolean {
+  if (config.provider !== "kimi") return false;
+  return model.toLowerCase().startsWith("kimi-k2.5");
+}
+
+function buildOpenAICompatibleBody(
+  config: LLMConfig,
+  model: string,
+  messages: ChatMessage[],
+  options?: ChatOptions,
+  forceStream?: boolean
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model,
+    messages,
+  };
+
+  if (forceStream) {
+    body.stream = true;
+  }
+
+  const shouldSendTemperature = !isKimiK25Model(config, model);
+  if (shouldSendTemperature) {
+    body.temperature = options?.temperature ?? 0.7;
+  }
+
+  return body;
+}
+
+async function parseProviderError(response: Response): Promise<string> {
+  const fallback = `API error: ${response.status}`;
+
+  try {
+    const data = await response.json();
+    const detail =
+      data?.error?.message || data?.error || data?.message || JSON.stringify(data);
+    return `${fallback} - ${detail}`;
+  } catch {
+    try {
+      const text = await response.text();
+      if (text) return `${fallback} - ${text}`;
+    } catch {
+      // ignore
+    }
+    return fallback;
+  }
+}
+
 function canCallProvider(config: LLMConfig | undefined): config is LLMConfig {
   if (!config) return false;
   if (config.provider === "ollama") return true;
@@ -22,7 +70,7 @@ const PROVIDER_DEFAULTS: Record<
   { baseUrl: string; model: string }
 > = {
   openai: { baseUrl: "https://api.openai.com/v1", model: "gpt-5-mini" },
-  deepseek: { baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
+  deepseek: { baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat" },
   kimi: { baseUrl: "https://api.moonshot.cn/v1", model: "kimi-k2.5" },
   claude: {
     baseUrl: "https://api.anthropic.com/v1",
@@ -127,15 +175,12 @@ async function openaiCompatibleChat(
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model,
-      messages,
-      temperature: options?.temperature ?? 0.7,
-    }),
+    body: JSON.stringify(buildOpenAICompatibleBody(config, model, messages, options)),
   });
 
   if (!response.ok) {
-    throw new Error(`${config.provider} API error: ${response.status}`);
+    const detail = await parseProviderError(response);
+    throw new Error(`${config.provider} ${detail}`);
   }
 
   const data = await response.json();
@@ -163,16 +208,14 @@ async function* openaiCompatibleChatStream(
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers,
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: true,
-      temperature: options?.temperature ?? 0.7,
-    }),
+    body: JSON.stringify(
+      buildOpenAICompatibleBody(config, model, messages, options, true)
+    ),
   });
 
   if (!response.ok) {
-    throw new Error(`${config.provider} API error: ${response.status}`);
+    const detail = await parseProviderError(response);
+    throw new Error(`${config.provider} ${detail}`);
   }
 
   const reader = response.body?.getReader();

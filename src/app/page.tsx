@@ -8,12 +8,15 @@ import {
   SettlementResult,
   TaskDecomposition,
   ModelProfile,
+  HistoryRecord,
 } from "@/lib/types";
 import TaskInput from "@/components/TaskInput";
 import AgentFlow from "@/components/AgentFlow";
 import SplitResult from "@/components/SplitResult";
 import Settings from "@/components/Settings";
-import { RiSettings3Line } from "@remixicon/react";
+import History from "@/components/History";
+import { saveHistoryRecord } from "@/lib/history";
+import { RiSettings3Line, RiHistoryLine } from "@remixicon/react";
 
 const PROFILES_STORAGE_KEY = "fairsplit_model_profiles";
 const DEFAULT_PROFILE_STORAGE_KEY = "fairsplit_default_profile_id";
@@ -31,6 +34,8 @@ export default function Home() {
   const [paymentUsdc, setPaymentUsdc] = useState(10);
   const [decomposition, setDecomposition] = useState<TaskDecomposition | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const queryRef = useRef<string>("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [settlementResult, setSettlementResult] = useState<SettlementResult | null>(null);
   const [settlementPending, setSettlementPending] = useState(false);
@@ -86,6 +91,7 @@ export default function Home() {
 
   const handleSubmit = useCallback(
     async (query: string, payment: number) => {
+      queryRef.current = query;
       setPaymentUsdc(payment);
       setPhase("running");
       setAgentOutputs({});
@@ -126,6 +132,13 @@ export default function Home() {
         const decoder = new TextDecoder();
         let buffer = "";
 
+        // Local accumulators for history saving
+        let localDecomposition: TaskDecomposition | null = null;
+        const localAgentOutputs: Record<string, string> = {};
+        const localTraces: ContributionTrace[] = [];
+        let localShapleyResult: ShapleyResult | null = null;
+        let localSettlementResult: SettlementResult | null = null;
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -141,19 +154,23 @@ export default function Home() {
               const event: SSEEvent = JSON.parse(data);
               switch (event.type) {
                 case "task_decomposed":
+                  localDecomposition = event.decomposition;
                   setDecomposition(event.decomposition);
                   break;
                 case "agent_start":
                   setActiveAgents((prev) => new Set([...prev, event.agent]));
                   setAgentOutputs((prev) => ({ ...prev, [event.agent]: prev[event.agent] || "" }));
+                  if (!(event.agent in localAgentOutputs)) localAgentOutputs[event.agent] = "";
                   break;
                 case "agent_chunk":
+                  localAgentOutputs[event.agent] = (localAgentOutputs[event.agent] || "") + event.content;
                   setAgentOutputs((prev) => ({
                     ...prev,
                     [event.agent]: (prev[event.agent] || "") + event.content,
                   }));
                   break;
                 case "agent_done":
+                  localTraces.push(event.trace);
                   setActiveAgents((prev) => {
                     const next = new Set(prev);
                     next.delete(event.agent);
@@ -163,6 +180,7 @@ export default function Home() {
                   setTraces((prev) => [...prev, event.trace]);
                   break;
                 case "shapley_result":
+                  localShapleyResult = event.result;
                   setShapleyResult(event.result);
                   setPhase("result");
                   break;
@@ -170,11 +188,26 @@ export default function Home() {
                   setSettlementPending(true);
                   break;
                 case "settlement_result":
+                  localSettlementResult = event.result;
                   setSettlementPending(false);
                   setSettlementResult(event.result);
                   break;
                 case "task_complete":
                   setSettlementPending(false);
+                  // Save to history
+                  if (localShapleyResult) {
+                    saveHistoryRecord({
+                      id: event.task_id,
+                      query,
+                      payment_usdc: payment,
+                      timestamp: Date.now(),
+                      decomposition: localDecomposition,
+                      agentOutputs: { ...localAgentOutputs },
+                      traces: [...localTraces],
+                      shapleyResult: localShapleyResult,
+                      settlementResult: localSettlementResult,
+                    });
+                  }
                   break;
                 case "error":
                   console.error("Backend error:", event.message);
@@ -200,6 +233,23 @@ export default function Home() {
     },
     [profiles, defaultProfileId, agentAssignments]
   );
+
+  const handleLoadHistory = useCallback((record: HistoryRecord) => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    queryRef.current = record.query;
+    setPaymentUsdc(record.payment_usdc);
+    setDecomposition(record.decomposition);
+    setAgentOutputs(record.agentOutputs);
+    setActiveAgents(new Set());
+    setCompletedAgents(new Set(Object.keys(record.agentOutputs)));
+    setTraces(record.traces);
+    setShapleyResult(record.shapleyResult);
+    setSettlementResult(record.settlementResult);
+    setSettlementPending(false);
+    setErrorMessage(null);
+    setPhase("result");
+  }, []);
 
   const handleReset = useCallback(() => {
     abortRef.current?.abort();
@@ -240,6 +290,13 @@ export default function Home() {
                 New Task
               </button>
             )}
+            <button
+              onClick={() => setHistoryOpen(true)}
+              className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors duration-200 hover:border-accent hover:text-accent"
+              title="History"
+            >
+              <RiHistoryLine size={18} />
+            </button>
             <button
               onClick={() => setSettingsOpen(true)}
               className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors duration-200 hover:border-accent hover:text-accent"
@@ -336,6 +393,13 @@ export default function Home() {
           Built with Shapley Value &middot; Base Sepolia &middot; Hackathon Demo
         </p>
       </footer>
+
+      {/* History Modal */}
+      <History
+        isOpen={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onLoad={handleLoadHistory}
+      />
 
       {/* Settings Modal */}
       <Settings
