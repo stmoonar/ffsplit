@@ -23,7 +23,8 @@ function agentScore(trace: ContributionTrace): number {
 }
 
 // Build a dynamic V(S) value table from actual contribution traces (N agents)
-function buildValueTable(traces: ContributionTrace[]): ValueTable {
+// synthesizerAction: the action string that identifies the synthesizer agent (default: "synthesize")
+function buildValueTable(traces: ContributionTrace[], synthesizerAction = "synthesize"): ValueTable {
   const traceMap = new Map<string, ContributionTrace>();
   for (const t of traces) {
     traceMap.set(t.agent, t);
@@ -36,8 +37,8 @@ function buildValueTable(traces: ContributionTrace[]): ValueTable {
     scores.set(agent, agentScore(trace));
   }
 
-  // Identify synthesizer (last agent, conventionally "synthesizer")
-  const synthId = allAgents.find((a) => a === "synthesizer") || allAgents[allAgents.length - 1];
+  // Identify synthesizer by action field (role-based, not name-based)
+  const synthId = traces.find((t) => t.action === synthesizerAction)?.agent || allAgents[allAgents.length - 1];
   const synthTrace = traceMap.get(synthId);
   const synthAdopted = synthTrace?.entities_adopted ?? 0;
   const isSynth = (a: string) => a === synthId;
@@ -95,27 +96,24 @@ function getAllSubsets<T>(arr: T[]): T[][] {
   return result;
 }
 
-// Generate all permutations of an array
-function permutations<T>(arr: T[]): T[][] {
-  if (arr.length <= 1) return [arr];
-  const result: T[][] = [];
-  for (let i = 0; i < arr.length; i++) {
-    const rest = [...arr.slice(0, i), ...arr.slice(i + 1)];
-    for (const perm of permutations(rest)) {
-      result.push([arr[i], ...perm]);
-    }
-  }
+// Precompute factorial values for Shapley weight calculation
+function factorial(n: number): number {
+  let result = 1;
+  for (let i = 2; i <= n; i++) result *= i;
   return result;
 }
 
-// Calculate Shapley Values by exhaustive enumeration (works for any N agents)
+// Calculate Shapley Values using subset-based formula: O(2^N) instead of O(N!)
+// φ_i = Σ_{S⊆N\{i}} [|S|!(n-|S|-1)!/n!] * [V(S∪{i}) - V(S)]
 export function calculateShapley(
   taskId: string,
   paymentUsdc: number,
   traces: ContributionTrace[]
 ): ShapleyResult {
   const allAgents = traces.map((t) => t.agent);
+  const n = allAgents.length;
   const valueTable = buildValueTable(traces);
+  const nFact = factorial(n);
 
   function V(agents: AgentId[]): number {
     if (agents.length === 0) return 0;
@@ -123,38 +121,52 @@ export function calculateShapley(
     return valueTable[key] ?? 0;
   }
 
-  const allPerms = permutations(allAgents);
-  const marginalSums: Record<string, number> = {};
+  // O(2^N) Shapley computation via subset enumeration
+  const shapleyValues: Record<string, number> = {};
   for (const agent of allAgents) {
-    marginalSums[agent] = 0;
+    shapleyValues[agent] = 0;
   }
-  const permDetails: PermutationDetail[] = [];
 
-  for (const perm of allPerms) {
-    const marginals: Record<string, number> = {};
-    const current: AgentId[] = [];
+  for (let i = 0; i < n; i++) {
+    const agent = allAgents[i];
+    // Enumerate all subsets of N \ {agent} using bitmask over (n-1) other agents
+    const others = allAgents.filter((_, idx) => idx !== i);
+    const m = others.length; // n - 1
 
-    for (const agent of perm) {
-      const valueBefore = V(current);
-      current.push(agent);
-      const valueAfter = V(current);
-      const marginal = valueAfter - valueBefore;
-
-      marginals[agent] = marginal;
-      marginalSums[agent] += marginal;
+    for (let mask = 0; mask < (1 << m); mask++) {
+      const S: AgentId[] = [];
+      for (let j = 0; j < m; j++) {
+        if (mask & (1 << j)) S.push(others[j]);
+      }
+      const s = S.length;
+      const weight = (factorial(s) * factorial(n - s - 1)) / nFact;
+      const marginal = V([...S, agent]) - V(S);
+      shapleyValues[agent] += weight * marginal;
     }
-
-    permDetails.push({
-      order: perm,
-      marginals,
-    });
   }
 
-  const n = allPerms.length;
   const totalValue = V(allAgents);
 
+  // Generate permutation details for UI display (still exhaustive but lazy — only for small N)
+  const permDetails: PermutationDetail[] = [];
+  if (n <= 6) {
+    // Only generate full permutation table for N ≤ 6 (720 perms) to keep UI responsive
+    const perms = permutations(allAgents);
+    for (const perm of perms) {
+      const marginals: Record<string, number> = {};
+      const current: AgentId[] = [];
+      for (const a of perm) {
+        const valueBefore = V(current);
+        current.push(a);
+        const valueAfter = V(current);
+        marginals[a] = valueAfter - valueBefore;
+      }
+      permDetails.push({ order: perm, marginals });
+    }
+  }
+
   const agents: AgentShapleyValue[] = allAgents.map((agent) => {
-    const shapleyValue = marginalSums[agent] / n;
+    const shapleyValue = shapleyValues[agent];
     const sharePercent = totalValue > 0 ? (shapleyValue / totalValue) * 100 : 0;
     return {
       agent,
@@ -174,4 +186,17 @@ export function calculateShapley(
     permutations: permDetails,
     value_table: valueTable,
   };
+}
+
+// Generate all permutations of an array (only used for UI permutation table, N ≤ 6)
+function permutations<T>(arr: T[]): T[][] {
+  if (arr.length <= 1) return [arr];
+  const result: T[][] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const rest = [...arr.slice(0, i), ...arr.slice(i + 1)];
+    for (const perm of permutations(rest)) {
+      result.push([arr[i], ...perm]);
+    }
+  }
+  return result;
 }

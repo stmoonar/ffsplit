@@ -20,6 +20,7 @@ contract SplitVault is EIP712 {
         uint256[] shares; // basis points (1/10000)
         bool splitSubmitted;
         bool settled;
+        bool exists; // prevents taskId reuse after refund
         uint256 deadline; // timestamp after which payer can refund
     }
 
@@ -101,7 +102,7 @@ contract SplitVault is EIP712 {
     ) external {
         if (agents.length == 0) revert NoAgents();
         if (amount == 0) revert NoPayment();
-        if (tasks[taskId].totalAmount != 0) revert TaskAlreadyExists();
+        if (tasks[taskId].exists) revert TaskAlreadyExists();
 
         // Transfer USDC from payer to this contract
         // Check balance before/after to guard against fee-on-transfer tokens
@@ -118,6 +119,7 @@ contract SplitVault is EIP712 {
             shares: new uint256[](0),
             splitSubmitted: false,
             settled: false,
+            exists: true,
             deadline: block.timestamp + REFUND_TIMEOUT
         });
         taskIds.push(taskId);
@@ -135,7 +137,7 @@ contract SplitVault is EIP712 {
         bytes calldata signature
     ) external {
         Task storage task = tasks[taskId];
-        if (task.totalAmount == 0) revert TaskNotFound();
+        if (!task.exists) revert TaskNotFound();
         if (task.splitSubmitted) revert SplitAlreadySubmitted();
         if (shares.length != task.agents.length) revert SharesLengthMismatch();
 
@@ -187,7 +189,7 @@ contract SplitVault is EIP712 {
     /// @param taskId Task to refund
     function refund(bytes32 taskId) external {
         Task storage task = tasks[taskId];
-        if (task.totalAmount == 0) revert TaskNotFound();
+        if (!task.exists) revert TaskNotFound();
         if (task.settled) revert AlreadySettled();
         if (task.splitSubmitted) revert SplitAlreadySubmitted();
         if (msg.sender != task.payer) revert NotPayer();
@@ -216,6 +218,7 @@ contract SplitVault is EIP712 {
             uint256[] memory shares,
             bool splitSubmitted,
             bool settled,
+            bool exists,
             uint256 deadline
         )
     {
@@ -227,6 +230,7 @@ contract SplitVault is EIP712 {
             task.shares,
             task.splitSubmitted,
             task.settled,
+            task.exists,
             task.deadline
         );
     }
